@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+
+# Virtualenv
+venv/
+
+# Environment
+.env
+
+# Django static/media
+backend/staticfiles/
+backend/media/
+
+# Node.js (Vue)
+node_modules/
+dist/
+
+# IDE
+.idea/
+*.iml
