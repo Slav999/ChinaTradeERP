@@ -8,7 +8,13 @@ class CustomUser(AbstractUser):
         ('viewer', 'Viewer'),
     )
 
+    email = models.EmailField(unique=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='viewer')
+    is_email_verified = models.BooleanField(default=False)
+    verification_code = models.CharField(max_length=6, blank=True, null=True)
+    reset_code = models.CharField(max_length=6, blank=True)
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
 
-    def __str__(self):
+def __str__(self):
         return f"{self.username} ({self.role})"

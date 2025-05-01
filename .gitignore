@@ -7,7 +7,7 @@ __pycache__/
 venv/
 
 # Environment
-.env
+backend/.env
 
 # Django static/media
 backend/staticfiles/
