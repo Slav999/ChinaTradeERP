@@ -19,6 +19,10 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+    def perform_create(self, serializer):
+        email = serializer.validated_data.get('email', '').lower()
+        serializer.save(email=email)
+
 
 class LoginView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
@@ -53,7 +57,7 @@ class VerifyEmailView(APIView):
         code = request.data.get("code")
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email=email.lower())
             if user.verification_code == code:
                 user.is_email_verified = True
                 user.verification_code = ""
@@ -82,7 +86,7 @@ class ForgotPasswordView(APIView):
             return Response({"detail": "Email обязателен."}, status=400)
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email=email.lower())
         except User.DoesNotExist:
             return Response({"detail": "Пользователь не найден."}, status=404)
 
@@ -121,7 +125,7 @@ class ResetPasswordView(APIView):
             return Response({"detail": "Все поля обязательны."}, status=400)
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email=email.lower())
         except User.DoesNotExist:
             return Response({"detail": "Пользователь не найден."}, status=404)
 
