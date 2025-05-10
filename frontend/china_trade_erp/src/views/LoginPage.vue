@@ -5,7 +5,8 @@
       <form @submit.prevent="login">
         <div class="mb-3">
           <label for="email" class="form-label">Email</label>
-          <input v-model="form.email" type="email" class="form-control" id="email" :class="{ 'is-invalid': errors.email }">
+          <input v-model="form.email" type="email" class="form-control" id="email"
+                 :class="{ 'is-invalid': errors.email }">
           <div class="invalid-feedback" v-if="errors.email">Valid email is required.</div>
         </div>
 
@@ -13,11 +14,11 @@
           <label for="password" class="form-label">Password</label>
           <div class="input-group">
             <input
-              :type="showPassword ? 'text' : 'password'"
-              v-model="form.password"
-              class="form-control"
-              id="password"
-              :class="{ 'is-invalid': errors.password }"
+                :type="showPassword ? 'text' : 'password'"
+                v-model="form.password"
+                class="form-control"
+                id="password"
+                :class="{ 'is-invalid': errors.password }"
             >
             <button type="button" class="btn btn-outline-secondary" @click="showPassword = !showPassword">
               <i :class="showPassword ? 'bi bi-eye-slash' : 'bi bi-eye'"></i>
@@ -70,8 +71,11 @@ export default {
 
       try {
         const response = await axios.post('http://localhost:8000/api/auth/login/', this.form)
-        const token = response.data.access
-        localStorage.setItem('access_token', token)
+        const access = response.data.access;
+        const refresh = response.data.refresh;
+        localStorage.setItem('access_token', access);
+        localStorage.setItem('refresh_token', refresh);
+
         this.$router.push('/me')
       } catch (err) {
         this.serverError = err.response?.data?.detail || 'Login failed.'

@@ -5,6 +5,7 @@ import ProfilePage from '../views/ProfilePage.vue'
 import ForgotPasswordPage from '../views/ForgotPasswordPage.vue'
 import ResetPasswordPage from '../views/ResetPasswordPage.vue'
 import VerifyEmailPage from '../views/VerifyEmailPage.vue'
+import CounterpartyPage from '../views/CounterpartyPage.vue'
 
 const routes = [
   { path: '/', redirect: '/login' },
@@ -14,6 +15,7 @@ const routes = [
   { path: '/forgot-password', component: ForgotPasswordPage },
   { path: '/reset-password', component: ResetPasswordPage },
   { path: '/verify-email', component: VerifyEmailPage },
+  { path: '/counterparty', component: CounterpartyPage },
 ]
 
 const router = createRouter({

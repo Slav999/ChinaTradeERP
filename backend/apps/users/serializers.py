@@ -4,6 +4,8 @@ from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .utils import send_verification_email
 import random
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 User = get_user_model()
 
@@ -17,11 +19,24 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ('id', 'username', 'email', 'password', 'password2', 'role')
         read_only_fields = ('id', 'role')
 
+    def validate_email(self, value):
+        email = value.strip().lower()
+
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            raise serializers.ValidationError("Invalid email format.")
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("Email is already in use.")
+
+        return email
+
     def validate(self, data):
         if data['password'] != data['password2']:
-            raise serializers.ValidationError("Пароли не совпадают.")
+            raise serializers.ValidationError("Passwords do not match.")
         if len(data['password']) < 8:
-            raise serializers.ValidationError("Пароль должен быть не менее 8 символов.")
+            raise serializers.ValidationError("Password must be at least 8 characters.")
         return data
 
     def create(self, validated_data):
