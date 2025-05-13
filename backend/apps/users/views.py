@@ -10,7 +10,7 @@ from django.core.cache import cache
 import random
 import time
 
-from .serializers import RegisterSerializer, UserSerializer, CustomTokenObtainPairSerializer
+from .serializers import RegisterSerializer, UserSerializer, CustomTokenObtainPairSerializer, InviteUserSerializer
 
 User = get_user_model()
 
@@ -22,6 +22,11 @@ class RegisterView(generics.CreateAPIView):
     def perform_create(self, serializer):
         email = serializer.validated_data.get('email', '').lower()
         serializer.save(email=email)
+
+
+class InviteUserView(generics.CreateAPIView):
+    serializer_class = InviteUserSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 
 class LoginView(TokenObtainPairView):

@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils.crypto import get_random_string
 
+from users.models import Company, CustomUser
+
 
 class CounterpartyStatus(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -11,6 +13,13 @@ class CounterpartyStatus(models.Model):
 
 
 class Counterparty(models.Model):
+    company = models.ForeignKey(
+        Company,
+        null=True,  # временно разрешаем NULL
+        blank = True,
+        on_delete=models.CASCADE,
+        related_name='counterparties'
+    )
     name = models.CharField(max_length=255)
     type = models.CharField(max_length=20, choices=[('china', 'Chinese'), ('local', 'Local')])
     unique_code = models.CharField(max_length=50, unique=True, blank=True)
@@ -20,6 +29,21 @@ class Counterparty(models.Model):
     email = models.EmailField(blank=True)
     source = models.CharField(max_length=255, blank=True)
     status = models.ForeignKey(CounterpartyStatus, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_counterparties'
+    )
+    updated_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='updated_counterparties'
+    )
 
     def save(self, *args, **kwargs):
         if not self.unique_code:
@@ -30,3 +54,27 @@ class Counterparty(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.get_type_display()})"
+
+
+class CounterpartyChangeLog(models.Model):
+    counterparty = models.ForeignKey(
+        'Counterparty',
+        on_delete=models.CASCADE,
+        related_name='history'
+    )
+    field_name = models.CharField(max_length=100)
+    old_value  = models.TextField(blank=True, null=True)
+    new_value  = models.TextField(blank=True, null=True)
+    changed_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='counterparty_changes'
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at']
+
+    def __str__(self):
+        return f"{self.counterparty.name}: {self.field_name} changed"
