@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'users',
     'corsheaders',
     'supplier_orders',
+    'customer_orders',
     'counterparties',
     'core',
     'products'

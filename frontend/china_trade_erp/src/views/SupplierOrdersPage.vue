@@ -30,9 +30,18 @@
     </div>
 
     <!-- Add Button -->
-    <button class="btn btn-primary mb-3 d-block mx-auto" @click="openModal">
-      + Add Order
-    </button>
+    <div class="d-flex justify-content-center gap-2 mb-3">
+      <button class="btn btn-primary mb-3" @click="openModal">
+        + Add Order
+      </button>
+      <button
+          class="btn btn-outline-secondary mb-3 d-inline-flex align-items-center"
+          @click="exportOrders"
+      >
+        <i class="bi bi-download me-1"></i>
+        Export
+      </button>
+    </div>
 
     <!-- Table -->
     <div class="table-responsive">
@@ -134,6 +143,25 @@ export default {
   },
 
   methods: {
+    async exportOrders() {
+      try {
+        const res = await axios.get('/api/supplier-order/export/', {
+          responseType: 'blob'
+        });
+        // создаём ссылку и кликаем для скачивания
+        const url = window.URL.createObjectURL(new Blob([res.data]));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'supplier_orders.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } catch (e) {
+        console.error(e);
+        alert('Не удалось экспортировать заказы');
+      }
+    },
     /* --- API --- */
     async fetchAux() {
       try {

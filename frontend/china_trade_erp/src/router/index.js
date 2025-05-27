@@ -13,6 +13,7 @@ import CustomerOrdersPage from '../views/CustomerOrdersPage.vue'
 import ProductsPage from '../views/ProductsPage.vue'
 import CounterpartyPage from '../views/CounterpartyPage.vue'
 import SupplierOrderDetail from '../views/SupplierOrderDetail.vue'
+import CustomerOrderDetail from '../views/CustomerOrderDetail.vue'
 
 const routes = [
     {path: '/', redirect: '/login'},
@@ -30,6 +31,8 @@ const routes = [
     {path: '/supplier-orders/new', component: SupplierOrderDetail},
     {path: '/supplier-orders/:id', component: SupplierOrderDetail, props: true},
     {path: '/customer-orders', component: CustomerOrdersPage},
+    {path: '/customer-orders/new', component: CustomerOrderDetail},
+    {path: '/customer-orders/:id', component: CustomerOrderDetail, props: true},
     {path: '/products', component: ProductsPage},
     {path: '/counterparty', component: CounterpartyPage},
 ]

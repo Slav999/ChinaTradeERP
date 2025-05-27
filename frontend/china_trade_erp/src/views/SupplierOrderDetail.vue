@@ -4,6 +4,13 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h1>{{ isEdit ? 'Edit Order' : 'New Order' }}</h1>
       <div>
+        <button
+            class="btn btn-primary me-2"
+            :disabled="isSending"
+            @click="sendToSupplier"
+        >
+          {{ isSending ? 'Sending...' : 'Send to Supplier' }}
+        </button>
         <button type="button" class="btn btn-success me-2" :disabled="isSaving" @click="saveOrder">
           {{ isSaving ? 'Saving...' : (isEdit ? 'Update Order' : 'Create Order') }}
         </button>
@@ -248,9 +255,10 @@
           </tr>
           </thead>
           <tbody>
-          <tr v-for="item in orderItems" :key="item.id" >
+          <tr v-for="item in orderItems" :key="item.id">
             <td @click="openProductModalForEdit(item.product)"
-              style="cursor:pointer; color:blue;">{{ item.product.name }}</td>
+                style="cursor:pointer; color:blue;">{{ item.product.name }}
+            </td>
             <td>{{ item.product.unit?.name || '—' }}</td>
             <td>
               <input
@@ -362,6 +370,7 @@ export default {
   components: {ProductAddEditModal},
   data() {
     return {
+      isSending: false,
       activeTab: 'order',
       showProductModal: false,
       editingProduct: null,
@@ -429,6 +438,19 @@ export default {
   },
 
   methods: {
+    async sendToSupplier() {
+    if (!confirm('Отправить заказ поставщику?')) return;
+    this.isSending = true;
+    try {
+      await axios.post(`/api/supplier-order/${this.selectedId}/send/`);
+      alert('Заказ отправлен!');
+    } catch (e) {
+      console.error(e);
+      alert('Не удалось отправить заказ.');
+    } finally {
+      this.isSending = false;
+    }
+  },
     openProductModalForEdit(product) {
       this.editingProduct = product;
       this.showProductModal = true;

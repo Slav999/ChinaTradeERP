@@ -10,7 +10,7 @@
       <transition name="modal-fade">
         <div class="modal-content" v-if="visible">
           <div class="modal-header">
-            <h5 class="modal-title">{{ isEdit ? 'Edit' : 'Add' }} Product</h5>
+            <h5 class="modal-title">{{ isEdit ? 'Edit Product' : 'Add Product' }}</h5>
             <button type="button" class="btn-close" @click="$emit('close')"></button>
           </div>
           <div class="modal-body">
@@ -119,7 +119,6 @@ export default {
             updated_at: null, updated_by: null,
           },
       imagePreview: this.initialProduct?.image || null,
-      isEdit: !!this.initialProduct,
     };
   },
   methods: {
@@ -152,6 +151,11 @@ export default {
       return val ? new Date(val).toLocaleString() : '—';
     },
   },
+  computed: {
+    isEdit() {
+      return Boolean(this.initialProduct && this.initialProduct.id);
+    }
+  },
   watch: {
     initialProduct(prod) {
       // reset form when prop changes
@@ -164,7 +168,6 @@ export default {
         updated_at: null, updated_by: null,
       };
       this.imagePreview = prod?.image || null;
-      this.isEdit = !!prod;
     }
   }
 };
