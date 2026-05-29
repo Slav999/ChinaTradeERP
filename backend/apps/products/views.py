@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
 from core.views import BaseAuditViewSet, ChangeLogHistoryMixin
@@ -14,7 +15,10 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     search_fields = ['name', 'sku']
 
     def get_queryset(self):
-        return Product.objects.filter(supplier__company=self.request.user.company)
+        queryset = Product.objects.filter(supplier__company=self.request.user.company)
+        if self.action == 'list':
+            queryset = queryset.filter(is_archived=False)
+        return queryset.order_by('-created_at', '-id')
 
     def get_serializer_class(self):
         if self.action == 'history':
@@ -43,6 +47,12 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
                     new_value=str(new_val or ''),
                     changed_by=self.request.user
                 )
+
+    def perform_destroy(self, instance):
+        instance.is_archived = True
+        instance.archived_at = timezone.now()
+        instance.archived_by = self.request.user
+        instance.save(update_fields=['is_archived', 'archived_at', 'archived_by', 'updated_at'])
 
 
 class ProductCategoryViewSet(viewsets.ReadOnlyModelViewSet):

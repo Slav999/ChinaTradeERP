@@ -11,6 +11,14 @@
         >
           {{ isSending ? 'Sending...' : 'Send to Customer' }}
         </button>
+        <button
+          v-if="isEdit"
+          class="btn btn-outline-primary me-2"
+          :disabled="isCreatingSupplierOrders"
+          @click="createSupplierOrders"
+        >
+          {{ isCreatingSupplierOrders ? 'Creating...' : 'Create supplier orders' }}
+        </button>
         <button type="button" class="btn btn-success me-2" :disabled="isSaving" @click="saveOrder">
           {{ isSaving ? 'Saving...' : (isEdit ? 'Update Order' : 'Create Order') }}
         </button>
@@ -32,14 +40,21 @@
           class="nav-link"
           :class="{ active: activeTab==='positions' }"
           @click="activeTab = 'positions'"
-        >Positions</button>
+        >Positions <span class="badge bg-secondary ms-1">{{ orderItems.length }}</span></button>
+      </li>
+      <li class="nav-item">
+        <button
+          class="nav-link"
+          :class="{ active: activeTab==='docs' }"
+          @click="activeTab = 'docs'"
+        >Related documents <span class="badge bg-secondary ms-1">{{ relatedDocs.length }}</span></button>
       </li>
       <li class="nav-item">
         <button
           class="nav-link"
           :class="{ active: activeTab==='files' }"
           @click="activeTab = 'files'"
-        >Files</button>
+        >Files <span class="badge bg-secondary ms-1">{{ filesCount }}</span></button>
       </li>
     </ul>
 
@@ -108,6 +123,17 @@
       </div>
     </transition>
 
+    <!-- Related Documents Tab -->
+    <transition name="fade">
+      <div v-if="activeTab==='docs'">
+        <RelatedDocumentsTree
+          :root="relatedRoot"
+          :children="relatedDocs"
+          empty-text="No supplier orders linked yet."
+        />
+      </div>
+    </transition>
+
     <!-- Files Tab -->
     <transition name="fade">
       <div v-if="activeTab==='files'">
@@ -144,7 +170,7 @@
             placeholder="Find product by name or SKU..."
           />
           <ul
-            v-if="positionSearch.length >= 2"
+            v-if="positionSearch.length >= 1"
             class="list-group position-absolute w-100"
             style="z-index:1000"
           >
@@ -265,14 +291,16 @@
 <script>
 import axios from '../axios';
 import ProductAddEditModal from '../components/ProductAddEditModal.vue';
+import RelatedDocumentsTree from '../components/RelatedDocumentsTree.vue';
 
 export default {
   name: 'CustomerOrderDetail',
-  components: { ProductAddEditModal },
+  components: { ProductAddEditModal, RelatedDocumentsTree },
   data() {
     return {
       isSending: false,
       isSaving: false,
+      isCreatingSupplierOrders: false,
       activeTab: 'order',
       showHistoryModal: false,
       orderForm: {},
@@ -290,6 +318,8 @@ export default {
       orderItems: [],
       positionSearch: '',
       productSuggestions: [],
+      relatedRoot: null,
+      relatedDocs: [],
 
       /* справочники */
       customers: [],
@@ -304,6 +334,7 @@ export default {
       /* product modal */
       showProductModal: false,
       editingProduct: null,
+      addProductToOrderAfterSave: false,
 
       selectedId: null,
     };
@@ -312,6 +343,9 @@ export default {
   computed: {
     isEdit() {
       return !!this.selectedId;
+    },
+    filesCount() {
+      return this.existingAttachments.length + this.attachments.length;
     }
   },
 
@@ -319,10 +353,27 @@ export default {
     this.selectedId = this.$route.params.id ? +this.$route.params.id : null;
     this.resetForm();
     this.fetchAux()
-      .then(() => {
-        if (this.isEdit) this.fetchOrder();
-        this.fetchOrderItems();
+      .then(async () => {
+        if (this.isEdit) {
+          await Promise.all([
+            this.fetchOrder(),
+            this.fetchOrderItems(),
+            this.fetchRelatedDocuments(),
+          ]);
+        }
       });
+  },
+
+  watch: {
+    '$route.params.id'(val) {
+      this.selectedId = val ? +val : null;
+      this.resetForm();
+      if (this.isEdit) {
+        this.fetchOrder();
+        this.fetchOrderItems();
+        this.fetchRelatedDocuments();
+      }
+    }
   },
 
   methods: {
@@ -379,9 +430,18 @@ export default {
       this.orderItems = data;
     },
 
-    async saveOrder() {
+    async fetchRelatedDocuments() {
+      if (!this.selectedId) return;
+      const { data } = await axios.get(`/api/customer-order/${this.selectedId}/related-documents/`);
+      this.relatedRoot = data.root;
+      this.relatedDocs = data.children || [];
+    },
+
+    async saveOrder(options = {}) {
+      const silent = options?.silent === true;
       this.isSaving = true;
       try {
+        const pendingItems = this.selectedId ? [] : [...this.orderItems];
         const fd = new FormData();
         const fields = [
           'order_number',
@@ -401,17 +461,35 @@ export default {
         let res;
         if (this.isEdit) {
           res = await axios.patch(`/api/customer-order/${this.selectedId}/`, fd, cfg);
-          alert('Order updated');
+          if (!silent) alert('Order updated');
           this.orderForm = { ...this.orderForm, ...res.data };
         } else {
           res = await axios.post('/api/customer-order/', fd, cfg);
-          alert('Order created');
-          this.$router.replace(`/customer-orders/${res.data.id}`);
-          return;
+          const newOrderId = res.data.id;
+          for (const item of pendingItems) {
+            await axios.post('/api/customer-order-items/', {
+              order: newOrderId,
+              product_id: item.product.id,
+              quantity: item.quantity,
+              comment: item.comment || '',
+            });
+          }
+          this.selectedId = newOrderId;
+          this.orderForm = {
+            ...this.defaultForm,
+            ...res.data,
+            status_id: res.data.status?.id,
+            customer_id: res.data.customer?.id,
+          };
+          if (!silent) alert('Order created');
+          await this.$router.replace(`/customer-orders/${newOrderId}`);
+          await this.fetchOrderItems();
         }
         this.attachments = [];
+        return res.data;
       } catch (e) {
         console.error(e.response?.data || e);
+        if (silent) return null;
         alert('Ошибка при сохранении');
       } finally {
         this.isSaving = false;
@@ -432,6 +510,21 @@ export default {
       }
     },
 
+    async createSupplierOrders() {
+      if (!this.selectedId) return;
+      this.isCreatingSupplierOrders = true;
+      try {
+        await axios.post(`/api/customer-order/${this.selectedId}/create-supplier-orders/`);
+        await this.fetchRelatedDocuments();
+        this.activeTab = 'docs';
+      } catch (e) {
+        console.error(e.response?.data || e);
+        alert(e.response?.data?.detail || 'Unable to create supplier orders');
+      } finally {
+        this.isCreatingSupplierOrders = false;
+      }
+    },
+
     async deleteAttachment(id) {
       if (!confirm('Delete this file?')) return;
       try {
@@ -444,7 +537,7 @@ export default {
     },
 
     async fetchProductSuggestions() {
-      if (this.positionSearch.length < 2) {
+      if (this.positionSearch.length < 1) {
         this.productSuggestions = [];
         return;
       }
@@ -455,6 +548,17 @@ export default {
     },
 
     async addPosition(product) {
+      if (!this.selectedId) {
+        this.orderItems.push({
+          id: `tmp-${Date.now()}-${product.id}`,
+          product,
+          quantity: 1,
+          comment: '',
+        });
+        this.positionSearch = '';
+        this.productSuggestions = [];
+        return;
+      }
       await axios.post('/api/customer-order-items/', {
         order: this.selectedId,
         product_id: product.id,
@@ -465,12 +569,29 @@ export default {
       this.fetchOrderItems();
     },
 
+    openProductModalForEdit(product) {
+      this.editingProduct = product;
+      this.addProductToOrderAfterSave = false;
+      this.showProductModal = true;
+    },
+
+    openProductModalWithName() {
+      this.editingProduct = { name: this.positionSearch };
+      this.addProductToOrderAfterSave = true;
+      this.showProductModal = true;
+    },
+
     async removeItem(itemId) {
+      if (String(itemId).startsWith('tmp-')) {
+        this.orderItems = this.orderItems.filter(item => item.id !== itemId);
+        return;
+      }
       await axios.delete(`/api/customer-order-items/${itemId}/`);
       this.fetchOrderItems();
     },
 
     async updatePosition(item) {
+      if (String(item.id).startsWith('tmp-')) return;
       await axios.patch(`/api/customer-order-items/${item.id}/`, {
         quantity: item.quantity
       });
@@ -479,6 +600,24 @@ export default {
 
     async onProductSaved(product) {
       this.showProductModal = false;
+      if (!this.addProductToOrderAfterSave) {
+        this.orderItems = this.orderItems.map(item =>
+          item.product?.id === product.id ? { ...item, product } : item
+        );
+        this.addProductToOrderAfterSave = false;
+        if (this.selectedId) await this.fetchOrderItems();
+        return;
+      }
+      this.addProductToOrderAfterSave = false;
+      if (!this.selectedId) {
+        this.orderItems.push({
+          id: `tmp-${Date.now()}-${product.id}`,
+          product,
+          quantity: 1,
+          comment: '',
+        });
+        return;
+      }
       await axios.post('/api/customer-order-items/', {
         order: this.selectedId,
         product_id: product.id,
@@ -498,6 +637,8 @@ export default {
       this.existingAttachments = [];
       this.attachments = [];
       this.orderItems = [];
+      this.relatedRoot = null;
+      this.relatedDocs = [];
     },
 
     formatDate(v) {

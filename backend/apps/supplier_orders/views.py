@@ -20,6 +20,7 @@ from rest_framework import status
 from django.db.models import Q
 import pandas as pd
 from django.http import FileResponse
+from customer_orders.services.create_supplier_orders import build_supplier_order_related_documents
 
 
 class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
@@ -131,6 +132,11 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
         email.send(fail_silently=False)
 
         return Response({"status": "sent"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='related-documents')
+    def related_documents(self, request, pk=None):
+        order = self.get_object()
+        return Response(build_supplier_order_related_documents(order))
 
     def get_serializer_class(self):
         if self.action == 'history':

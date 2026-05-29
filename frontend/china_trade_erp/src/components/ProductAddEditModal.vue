@@ -56,7 +56,7 @@
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Supplier</label>
-                  <select v-model="form.supplier_id" class="form-select">
+                  <select v-model="form.supplier_id" class="form-select" required>
                     <option disabled value="">Select supplier...</option>
                     <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
                   </select>
@@ -108,23 +108,72 @@ export default {
   },
   data() {
     return {
-      form: this.initialProduct
-          ? {...this.initialProduct, image: null}
-          : {
-            name: '', sku: '', category_id: null, unit_id: null,
-            supplier_id: null, quantity: 0,
-            purchase_price: 0, sale_price: 0,
-            image: null,
-            created_at: null, created_by: null,
-            updated_at: null, updated_by: null,
-          },
+      form: this.initialProduct ? this.normalizeProduct(this.initialProduct) : this.emptyForm(),
       imagePreview: this.initialProduct?.image || null,
     };
   },
   methods: {
+    emptyForm() {
+      return {
+        name: '', sku: '', category_id: null, unit_id: null,
+        supplier_id: null, quantity: 0,
+        purchase_price: 0, sale_price: 0,
+        image: null,
+        created_at: null, created_by: null,
+        updated_at: null, updated_by: null,
+      };
+    },
+    normalizeProduct(product) {
+      return {
+        ...this.emptyForm(),
+        ...product,
+        category_id: product.category_id || product.category?.id || null,
+        unit_id: product.unit_id || product.unit?.id || null,
+        supplier_id: product.supplier_id || product.supplier?.id || null,
+        image: null,
+      };
+    },
+    validateForm() {
+      if (!this.form.name?.trim()) {
+        alert('Please enter a product name');
+        return false;
+      }
+      if (!this.form.sku?.trim()) {
+        alert('Please enter SKU');
+        return false;
+      }
+      if (!this.form.supplier_id) {
+        alert('Please select a supplier');
+        return false;
+      }
+      return true;
+    },
+    formatApiError(error) {
+      const data = error.response?.data;
+      if (!data) return 'Unable to save product';
+      if (typeof data === 'string') return data;
+
+      const labels = {
+        name: 'Name',
+        sku: 'SKU',
+        supplier_id: 'Supplier',
+        category_id: 'Category',
+        unit_id: 'Unit',
+      };
+
+      return Object.entries(data)
+          .map(([field, messages]) => {
+            const label = labels[field] || field;
+            const text = Array.isArray(messages) ? messages.join(' ') : messages;
+            return `${label}: ${text}`;
+          })
+          .join('\n');
+    },
     async save() {
+      if (!this.validateForm()) return;
       const fd = new FormData();
       Object.entries(this.form).forEach(([k, v]) => {
+        if (['id', 'category', 'unit', 'supplier', 'created_at', 'created_by', 'updated_at', 'updated_by'].includes(k)) return;
         if (v !== null && v !== undefined) fd.append(k, v);
       });
       try {
@@ -138,6 +187,7 @@ export default {
         this.$emit('saved', res.data);
       } catch (e) {
         console.error(e);
+        alert(this.formatApiError(e));
       }
     },
     handleImageUpload(e) {
@@ -159,14 +209,7 @@ export default {
   watch: {
     initialProduct(prod) {
       // reset form when prop changes
-      this.form = prod ? {...prod, image: null} : {
-        name: '', sku: '', category_id: null, unit_id: null,
-        supplier_id: null, quantity: 0,
-        purchase_price: 0, sale_price: 0,
-        image: null,
-        created_at: null, created_by: null,
-        updated_at: null, updated_by: null,
-      };
+      this.form = prod ? this.normalizeProduct(prod) : this.emptyForm();
       this.imagePreview = prod?.image || null;
     }
   }

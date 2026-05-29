@@ -41,7 +41,7 @@
             class="nav-link"
             :class="{ active: activeTab==='docs' }"
             @click="activeTab = 'docs'"
-        >Related documents
+        >Related documents <span class="badge bg-secondary ms-1">{{ relatedDocsCount }}</span>
         </button>
       </li>
       <li class="nav-item">
@@ -49,7 +49,7 @@
             class="nav-link"
             :class="{ active: activeTab==='files' }"
             @click="activeTab = 'files'"
-        >Files
+        >Files <span class="badge bg-secondary ms-1">{{ filesCount }}</span>
         </button>
       </li>
     </ul>
@@ -181,6 +181,20 @@
       </div>
     </transition>
     <transition>
+      <div v-if="activeTab==='docs'">
+        <RelatedDocumentsTree
+            v-if="relatedRoot"
+            :root="relatedRoot"
+            :children="relatedDocs"
+            :highlight-id="selectedId"
+            empty-text="No related supplier orders."
+        />
+        <div v-else class="text-muted py-3">
+          Parent customer order is not linked.
+        </div>
+      </div>
+    </transition>
+    <transition>
       <div v-if="activeTab==='files'">
         <div class="col-12">
           <label class="form-label small">Attachments</label>
@@ -222,7 +236,7 @@
               placeholder="Найти товар по имени или SKU..."
           />
           <ul
-              v-if="positionSearch.length >= 2"
+              v-if="positionSearch.length >= 1"
               class="list-group position-absolute w-100"
               style="z-index:1000"
           >
@@ -364,17 +378,21 @@
 <script>
 import axios from '../axios';
 import ProductAddEditModal from "../components/ProductAddEditModal.vue";
+import RelatedDocumentsTree from "../components/RelatedDocumentsTree.vue";
 
 export default {
   name: 'SupplierOrderDetail',
-  components: {ProductAddEditModal},
+  components: {ProductAddEditModal, RelatedDocumentsTree},
   data() {
     return {
       isSending: false,
       activeTab: 'order',
       showProductModal: false,
       editingProduct: null,
+      addProductToOrderAfterSave: false,
       orderItems: [],
+      relatedRoot: null,
+      relatedDocs: [],
       positionSearch: '',
       productSuggestions: [],
       /* вложения */
@@ -417,6 +435,12 @@ export default {
   computed: {
     isEdit() {
       return !!this.selectedId;
+    },
+    filesCount() {
+      return this.existingAttachments.length + this.attachments.length;
+    },
+    relatedDocsCount() {
+      return this.relatedRoot ? this.relatedDocs.length : 0;
     }
   },
 
@@ -424,8 +448,11 @@ export default {
     this.selectedId = this.$route.params.id ? +this.$route.params.id : null;
     this.resetForm();
     this.fetchAux().then(() => {
-      if (this.isEdit) this.fetchOrder()
-      this.fetchOrderItems();
+      if (this.isEdit) {
+        this.fetchOrder();
+        this.fetchOrderItems();
+        this.fetchRelatedDocuments();
+      }
     });
   },
 
@@ -433,7 +460,11 @@ export default {
     '$route.params.id'(val) {
       this.selectedId = val ? +val : null;
       this.resetForm();
-      if (this.isEdit) this.fetchOrder();
+      if (this.isEdit) {
+        this.fetchOrder();
+        this.fetchOrderItems();
+        this.fetchRelatedDocuments();
+      }
     }
   },
 
@@ -453,15 +484,17 @@ export default {
   },
     openProductModalForEdit(product) {
       this.editingProduct = product;
+      this.addProductToOrderAfterSave = false;
       this.showProductModal = true;
     },
     openProductModalWithName() {
       this.editingProduct = {name: this.positionSearch};
+      this.addProductToOrderAfterSave = true;
       this.showProductModal = true;
     },
     // 1) подсказки
     async fetchProductSuggestions() {
-      if (this.positionSearch.length < 2) {
+      if (this.positionSearch.length < 1) {
         this.productSuggestions = []
         return
       }
@@ -473,6 +506,20 @@ export default {
 
     // 2) добавить позицию
     async addPosition(product) {
+      if (!this.selectedId) {
+        if (!this.orderForm.supplier_id && product.supplier?.id) {
+          this.orderForm.supplier_id = product.supplier.id;
+        }
+        this.orderItems.push({
+          id: `tmp-${Date.now()}-${product.id}`,
+          product,
+          quantity: 1,
+          comment: '',
+        });
+        this.positionSearch = '';
+        this.productSuggestions = [];
+        return;
+      }
       await axios.post('/api/supplier-order-items/', {
         order: this.selectedId,
         product_id: product.id,
@@ -485,6 +532,10 @@ export default {
 
     // 3) удалить
     async removeItem(itemId) {
+      if (String(itemId).startsWith('tmp-')) {
+        this.orderItems = this.orderItems.filter(item => item.id !== itemId);
+        return;
+      }
       await axios.delete(`/api/supplier-order-items/${itemId}/`)
       await this.fetchOrderItems()
     },
@@ -498,8 +549,62 @@ export default {
       this.orderItems = data
     },
 
+    async fetchRelatedDocuments() {
+      if (!this.selectedId) return;
+      const {data} = await axios.get(`/api/supplier-order/${this.selectedId}/related-documents/`);
+      this.relatedRoot = data.root;
+      this.relatedDocs = data.children || [];
+    },
+
     // 5) менять количество «на лету»
+    async unusedEnsureOrderSaved(product = null) {
+      if (this.selectedId) return true;
+
+      if (!this.orderForm.supplier_id && product?.supplier?.id) {
+        this.orderForm.supplier_id = product.supplier.id;
+      }
+      if (!this.orderForm.supplier_id) {
+        alert('Select supplier before adding positions.');
+        return false;
+      }
+
+      const fd = new FormData();
+      const allowed = [
+        'status_id', 'supplier_id', 'customer_id',
+        'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
+        'shipping_address', 'shipping_code', 'supplier_comment', 'amount_cny',
+        'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date', 'order_number',
+      ];
+      allowed.forEach(k => {
+        const v = this.orderForm[k];
+        if (v != null && v !== '') fd.append(k, v);
+      });
+      this.attachments.forEach(f => fd.append('attachments', f));
+
+      try {
+        const {data} = await axios.post('/api/supplier-order/', fd, {
+          headers: {'Content-Type': 'multipart/form-data'},
+        });
+        this.selectedId = data.id;
+        this.orderForm = {
+          ...this.defaultForm,
+          ...data,
+          status_id: data.status?.id,
+          supplier_id: data.supplier?.id,
+          customer_id: data.customer?.id,
+        };
+        this.attachments = [];
+        await this.$router.replace(`/supplier-orders/${data.id}`);
+        return true;
+      } catch (e) {
+        console.error('Save error', e.response?.data || e);
+        alert('Unable to save order before adding positions.');
+        return false;
+      }
+    },
+
     async updatePosition(item) {
+      if (String(item.id).startsWith('tmp-')) return;
       await axios.patch(`/api/supplier-order-items/${item.id}/`, {
         quantity: item.quantity
       })
@@ -508,6 +613,27 @@ export default {
     },
     async onProductSaved(product) {
       this.showProductModal = false;
+      if (!this.addProductToOrderAfterSave) {
+        this.orderItems = this.orderItems.map(item =>
+          item.product?.id === product.id ? {...item, product} : item
+        );
+        this.addProductToOrderAfterSave = false;
+        if (this.selectedId) await this.fetchOrderItems();
+        return;
+      }
+      this.addProductToOrderAfterSave = false;
+      if (!this.selectedId) {
+        if (!this.orderForm.supplier_id && product.supplier?.id) {
+          this.orderForm.supplier_id = product.supplier.id;
+        }
+        this.orderItems.push({
+          id: `tmp-${Date.now()}-${product.id}`,
+          product,
+          quantity: 1,
+          comment: '',
+        });
+        return;
+      }
       await axios.post('/api/supplier-order-items/', {
         order: this.selectedId,
         product_id: product.id,
@@ -526,6 +652,9 @@ export default {
     /* --- util --- */
     resetForm() {
       this.orderForm = {...this.defaultForm};
+      this.orderItems = [];
+      this.relatedRoot = null;
+      this.relatedDocs = [];
     },
     formatDate(v) {
       return v ? new Date(v).toLocaleString() : '—';
@@ -574,8 +703,10 @@ export default {
       }
     },
 
-    async saveOrder() {
+    async saveOrder(options = {}) {
+      const silent = options?.silent === true;
       this.isSaving = true;
+      const pendingItems = this.selectedId ? [] : [...this.orderItems];
       try {
         /* 1. собираем form-data */
         const fd = new FormData();
@@ -608,13 +739,34 @@ export default {
         } else {
           /* POST → переводим страницу в режим редактирования созданного заказа */
           res = await axios.post('/api/supplier-order/', fd, cfg);
+          const newOrderId = res.data.id;
+          for (const item of pendingItems) {
+            await axios.post('/api/supplier-order-items/', {
+              order: newOrderId,
+              product_id: item.product.id,
+              quantity: item.quantity,
+              comment: item.comment || '',
+            });
+          }
+          this.selectedId = newOrderId;
+          this.orderForm = {
+            ...this.defaultForm,
+            ...res.data,
+            status_id: res.data.status?.id,
+            supplier_id: res.data.supplier?.id,
+            customer_id: res.data.customer?.id,
+          };
           alert('Заказ создан');
-          this.$router.replace(`/supplier-orders/${res.data.id}`);
+          await this.$router.replace(`/supplier-orders/${res.data.id}`);
+          await this.fetchOrderItems();
+          this.attachments = [];
+          return res.data;
           return;                /* компонент перезагрузится watcher-ом */
         }
 
         /* очищаем буферы */
         this.attachments = [];
+        return res.data;
 
       } catch (e) {
         console.error('Save error', e.response?.data || e);

@@ -84,6 +84,8 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         order = CustomerOrder(**validated_data)
         if status is not None:
             order.status = status
+        else:
+            order.status = CustomerOrderStatus.objects.order_by('id').first()
         if customer is not None:
             order.customer = customer
         order.save()

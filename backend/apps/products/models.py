@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from counterparties.models import Counterparty
 from core.models import BaseModel, ChangeLog
@@ -114,6 +115,15 @@ class Product(BaseModel):
     height_m = models.DecimalField(
         "Box height (m)", max_digits=8, decimal_places=3,
         null=True, blank=True
+    )
+    is_archived = models.BooleanField(default=False)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='archived_products'
     )
 
     def calculate_sale_price(self, settings: GlobalSettings) -> Decimal:

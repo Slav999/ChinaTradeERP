@@ -14,6 +14,13 @@ from counterparties.serializers import CounterpartySerializer
 from products.serializers import ProductSerializer, UnitSerializer
 
 
+class LinkedCustomerOrderSerializer(serializers.ModelSerializer):
+    class Meta:
+        from customer_orders.models import CustomerOrder
+        model = CustomerOrder
+        fields = ('id', 'order_number')
+
+
 class SupplierOrderStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierOrderStatus
@@ -72,6 +79,7 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         source='customer', write_only=True,
         required=False, allow_null=True
     )
+    customer_order = LinkedCustomerOrderSerializer(read_only=True)
 
     payment_details_qr = serializers.ImageField(read_only=True)
     items = SupplierOrderItemSerializer(many=True, required=False)
@@ -82,6 +90,7 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         fields = (
             'id', 'order_number', 'created_at', 'updated_at', 'created_by', 'updated_by',
             'status', 'status_id', 'supplier_id', 'supplier', 'customer_id', 'customer',
+            'customer_order',
             'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
             'shipping_address', 'shipping_code', 'supplier_comment',
             'amount_cny', 'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date',
@@ -99,6 +108,8 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         order.supplier = supplier
         if status is not None:
             order.status = status
+        else:
+            order.status = SupplierOrderStatus.objects.order_by('id').first()
         if customer is not None:
             order.customer = customer
         order.save()

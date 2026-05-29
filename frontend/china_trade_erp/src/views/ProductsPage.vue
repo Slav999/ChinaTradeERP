@@ -180,6 +180,7 @@
                     <select
                         v-model="productForm.supplier_id"
                         class="form-select"
+                        required
                     >
                       <option disabled value="">Select supplier...</option>
                       <option
@@ -534,10 +535,48 @@ export default {
       this.showModal = true;
       this.imagePreview = item.image || null;
     },
+    validateProductForm() {
+      if (!this.productForm.name?.trim()) {
+        alert('Please enter a product name');
+        return false;
+      }
+      if (!this.productForm.sku?.trim()) {
+        alert('Please enter SKU');
+        return false;
+      }
+      if (!this.productForm.supplier_id) {
+        alert('Please select a supplier');
+        return false;
+      }
+      return true;
+    },
+    formatApiError(error) {
+      const data = error.response?.data;
+      if (!data) return 'Unable to save product';
+      if (typeof data === 'string') return data;
+
+      const labels = {
+        name: 'Name',
+        sku: 'SKU',
+        supplier_id: 'Supplier',
+        category_id: 'Category',
+        unit_id: 'Unit',
+      };
+
+      return Object.entries(data)
+          .map(([field, messages]) => {
+            const label = labels[field] || field;
+            const text = Array.isArray(messages) ? messages.join(' ') : messages;
+            return `${label}: ${text}`;
+          })
+          .join('\n');
+    },
     async saveProduct() {
+      if (!this.validateProductForm()) return;
       try {
         const formData = new FormData();
         Object.entries(this.productForm).forEach(([k, v]) => {
+          if (['id', 'created_at', 'created_by', 'updated_at', 'updated_by'].includes(k)) return;
           if (v !== null && v !== undefined) formData.append(k, v);
         });
         const cfg = {headers: {'Content-Type': 'multipart/form-data'}};
@@ -553,10 +592,11 @@ export default {
         this.closeModal();
       } catch (err) {
         console.error('Save error:', err.response?.data || err);
+        alert(this.formatApiError(err));
       }
     },
     async deleteProduct(id) {
-      if (confirm('Delete this product?')) {
+      if (confirm('Archive this product?')) {
         await axios.delete(`/api/products/${id}/`);
         this.products = this.products.filter(x => x.id !== id);
       }

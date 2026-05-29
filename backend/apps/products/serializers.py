@@ -61,4 +61,7 @@ class ProductSerializer(AuditFieldsMixinSerializer, serializers.ModelSerializer)
             'updated_at',
             'created_by',
             'updated_by',
+            'is_archived',
+            'archived_at',
+            'archived_by',
         )

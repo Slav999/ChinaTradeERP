@@ -17,6 +17,12 @@ from .serializers import (
     CustomerOrderItemSerializer,
     CustomerOrderAttachmentSerializer
 )
+from .services.create_supplier_orders import (
+    SupplierOrderCreationError,
+    build_customer_order_related_documents,
+    create_supplier_orders_for_customer_order,
+    supplier_order_card,
+)
 import io
 from django.conf import settings
 from django.core.mail import EmailMessage
@@ -133,6 +139,39 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
         email.send(fail_silently=False)
 
         return Response({"status": "sent"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='create-supplier-orders')
+    def create_supplier_orders(self, request, pk=None):
+        order = self.get_object()
+        try:
+            result = create_supplier_orders_for_customer_order(order, request.user)
+        except SupplierOrderCreationError as exc:
+            return Response({'detail': exc.detail}, status=exc.status_code)
+
+        created_orders = result['created']
+        updated_orders = result['updated']
+        response_status = (
+            status.HTTP_201_CREATED if created_orders else status.HTTP_200_OK
+        )
+        return Response(
+            {
+                'count': len(created_orders) + len(updated_orders),
+                'created': [supplier_order_card(order) for order in created_orders],
+                'updated': [supplier_order_card(order) for order in updated_orders],
+            },
+            status=response_status,
+        )
+
+    @action(detail=True, methods=['get'], url_path='supplier-orders')
+    def supplier_orders(self, request, pk=None):
+        order = self.get_object()
+        data = build_customer_order_related_documents(order)
+        return Response(data['children'])
+
+    @action(detail=True, methods=['get'], url_path='related-documents')
+    def related_documents(self, request, pk=None):
+        order = self.get_object()
+        return Response(build_customer_order_related_documents(order))
 
     def get_serializer_class(self):
         if self.action == 'history':

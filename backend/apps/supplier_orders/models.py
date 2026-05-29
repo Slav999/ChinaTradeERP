@@ -64,6 +64,14 @@ class SupplierOrder(BaseModel):
         blank=True,
         null=True,
     )
+    customer_order = models.ForeignKey(
+        'customer_orders.CustomerOrder',
+        verbose_name='Customer Order',
+        on_delete=models.SET_NULL,
+        related_name='supplier_orders',
+        blank=True,
+        null=True,
+    )
     planned_receipt_date = models.DateField(
         "План. дата приёмки", blank=True, null=True
     )
@@ -117,6 +125,9 @@ class SupplierOrder(BaseModel):
         verbose_name = "Заказ поставщику"
         verbose_name_plural = "Заказы поставщику"
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['customer_order', 'supplier']),
+        ]
 
     def save(self, *args, **kwargs):
         # Подставляем дефолтный адрес если не указан
