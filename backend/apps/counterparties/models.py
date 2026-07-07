@@ -22,6 +22,8 @@ class Counterparty(BaseModel):
     )
     name = models.CharField(max_length=255)
     type = models.CharField(max_length=20, choices=[('china', 'Chinese'), ('local', 'Local')])
+    is_supplier = models.BooleanField(default=False)
+    is_customer = models.BooleanField(default=False)
     unique_code = models.CharField(max_length=50, unique=True, blank=True)
     address = models.TextField(blank=True, null=True)
     qr_code_image = models.ImageField(upload_to='qr_codes/', blank=True, null=True)

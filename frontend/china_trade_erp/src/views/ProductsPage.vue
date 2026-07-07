@@ -14,22 +14,18 @@
         />
       </div>
       <div class="col-md-3">
-        <select v-model="filters.category" class="form-select">
+        <select v-model="filters.category" class="form-select" @change="onSearchInput">
           <option disabled selected hidden value="">Select category...</option>
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </div>
       <div class="col-md-3">
-        <input
+        <AutocompleteInput
             v-model.trim="filters.supplierQuery"
             @input="onSearchInput"
-            list="suppliersList"
-            class="form-control"
+            :options="suppliers"
             placeholder="Filter by supplier..."
         />
-        <datalist id="suppliersList">
-          <option v-for="s in suppliers" :key="s.id" :value="s.name"></option>
-        </datalist>
       </div>
       <div class="col-md-2 d-flex align-items-end">
         <button class="btn btn-secondary w-100" @click="resetFilters">Reset</button>
@@ -58,7 +54,7 @@
         </thead>
         <tbody>
         <tr
-            v-for="p in filteredProducts"
+            v-for="p in products"
             :key="p.id"
             @click="editProduct(p)"
             style="cursor: pointer;"
@@ -84,11 +80,31 @@
             </button>
           </td>
         </tr>
-        <tr v-if="!filteredProducts.length">
+        <tr v-if="isLoading">
+          <td colspan="8" class="text-center text-muted">Loading...</td>
+        </tr>
+        <tr v-else-if="!products.length">
           <td colspan="8" class="text-center text-muted">No products found.</td>
         </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+      <div class="text-muted small">
+        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
+          Previous
+        </button>
+        <button class="btn btn-outline-secondary btn-sm disabled">
+          Page {{ page }} / {{ totalPages }}
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
+          Next
+        </button>
+      </div>
     </div>
 
     <!-- Add/Edit Modal -->
@@ -109,7 +125,7 @@
               <!-- Audit Info -->
               <div
                   v-if="isEdit"
-                  class="audit-info mb-3 p-3 bg-light rounded border"
+                  class="audit-info mt-3 mb-3 p-3 bg-light rounded border"
                   @click="openHistory"
                   style="cursor: pointer;"
               >
@@ -265,14 +281,14 @@
         :style="showHistoryModal ? 'display: block;' : ''"
         tabindex="-1"
     >
-      <div class="modal-dialog modal-dialog-scrollable modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
         <transition name="modal-fade">
           <div class="modal-content" v-if="showHistoryContent">
             <div class="modal-header">
               <h5 class="modal-title">Change History</h5>
               <button type="button" class="btn-close" @click="closeHistory"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body history-modal-body">
               <table v-if="historyLogs.length" class="table table-striped">
                 <thead>
                 <tr>
@@ -404,9 +420,15 @@
 <script>
 import axios from '../axios';
 import debounce from 'lodash/debounce';
+import AutocompleteInput from '../components/AutocompleteInput.vue';
+import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+
+const TABLE_STATE_KEY = 'products-table-state';
+const PAGE_SIZE = 50;
 
 export default {
   name: 'ProductView',
+  components: { AutocompleteInput },
   data() {
     return {
       products: [],
@@ -415,6 +437,10 @@ export default {
       suppliers: [],
       searchQuery: '',
       filters: {category: '', supplierQuery: ''},
+      page: 1,
+      pageSize: PAGE_SIZE,
+      totalCount: 0,
+      isLoading: false,
       showModal: false,
       showEditContent: true,
       isEdit: false,
@@ -455,26 +481,29 @@ export default {
   },
   created() {
     this.defaultForm = {...this.productForm};
+    this.restoreTableState();
     this.fetchAll();
   },
   computed: {
-    filteredProducts() {
-      const q = this.searchQuery.trim().toLowerCase();
-      return this.products.filter(p => {
-        const text = `${p.name} ${p.sku}`.toLowerCase();
-        const matchQuery = !q || text.includes(q);
-        const matchCat = !this.filters.category || p.category?.id === +this.filters.category;
-        const matchSup = !this.filters.supplierQuery || (p.supplier?.name || '').toLowerCase().includes(this.filters.supplierQuery.trim().toLowerCase());
-        return matchQuery && matchCat && matchSup;
-      });
+    totalPages() {
+      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+    },
+    pageStart() {
+      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+    },
+    pageEnd() {
+      return Math.min(this.page * this.pageSize, this.totalCount);
     },
   },
   methods: {
     onSearchInput: debounce(function () {
+      this.page = 1;
+      this.saveTableState();
+      this.fetchProducts();
     }, 300),
     async fetchAll() {
       await Promise.all([
-        this.fetchProducts(),
+        this.fetchProducts({ useCache: true }),
         this.fetchCategories(),
         this.fetchUnits(),
         this.fetchSuppliers(),
@@ -485,25 +514,106 @@ export default {
       const res = await axios.get('/api/settings/');
       this.systemSettings = res.data[0] || null;
     },
-    async fetchProducts() {
-      const res = await axios.get('/api/products/');
-      this.products = res.data;
+    async fetchProducts({ useCache = false } = {}) {
+      const cacheKey = this.productsCacheKey();
+      const cached = useCache ? getCachedJson(cacheKey) : null;
+      if (cached) {
+        this.applyProductsResponse(cached);
+      }
+
+      this.isLoading = !cached;
+      try {
+        const res = await axios.get('/api/products/', {
+          params: this.productQueryParams()
+        });
+        setCachedJson(cacheKey, res.data);
+        this.applyProductsResponse(res.data);
+      } catch (e) {
+        console.error(e);
+        alert('Unable to load products');
+      } finally {
+        this.isLoading = false;
+      }
     },
     async fetchCategories() {
+      const cached = getCachedJson('product-categories');
+      if (cached) {
+        this.categories = cached;
+        return;
+      }
+
       const res = await axios.get('/api/product-category/');
       this.categories = res.data;
+      setCachedJson('product-categories', this.categories);
     },
     async fetchUnits() {
+      const cached = getCachedJson('product-units');
+      if (cached) {
+        this.units = cached;
+        return;
+      }
+
       const res = await axios.get('/api/units/');
       this.units = res.data;
+      setCachedJson('product-units', this.units);
     },
     async fetchSuppliers() {
-      const res = await axios.get('/api/counterparties/');
+      const cached = getCachedJson('counterparty-options:supplier');
+      if (cached) {
+        this.suppliers = cached;
+        return;
+      }
+
+      const res = await axios.get('/api/counterparties/options/', { params: { role: 'supplier' } });
       this.suppliers = res.data;
+      setCachedJson('counterparty-options:supplier', this.suppliers);
     },
     resetFilters() {
       this.searchQuery = '';
       this.filters = {category: '', supplierQuery: ''};
+      this.page = 1;
+      this.saveTableState();
+      this.fetchProducts();
+    },
+    productQueryParams() {
+      return {
+        page: this.page,
+        page_size: this.pageSize,
+        search: this.searchQuery || undefined,
+        category: this.filters.category || undefined,
+        supplier_query: this.filters.supplierQuery || undefined,
+      };
+    },
+    productsCacheKey() {
+      return `products:${JSON.stringify(this.productQueryParams())}`;
+    },
+    applyProductsResponse(data) {
+      const page = paginatedResults(data);
+      this.products = page.results;
+      this.totalCount = page.count;
+    },
+    saveTableState() {
+      setSavedState(TABLE_STATE_KEY, {
+        page: this.page,
+        searchQuery: this.searchQuery,
+        filters: this.filters,
+      });
+    },
+    restoreTableState() {
+      const state = getSavedState(TABLE_STATE_KEY, {
+        page: 1,
+        searchQuery: '',
+        filters: {category: '', supplierQuery: ''},
+      });
+      this.page = state.page;
+      this.searchQuery = state.searchQuery;
+      this.filters = state.filters;
+    },
+    changePage(page) {
+      if (page < 1 || page > this.totalPages || page === this.page) return;
+      this.page = page;
+      this.saveTableState();
+      this.fetchProducts({ useCache: true });
     },
     openModal() {
       this.productForm = {...this.defaultForm};
@@ -589,7 +699,9 @@ export default {
           res = await axios.post('/api/products/', formData, cfg);
           this.products.unshift(res.data);
         }
+        clearCacheByPrefix('products:');
         this.closeModal();
+        this.fetchProducts();
       } catch (err) {
         console.error('Save error:', err.response?.data || err);
         alert(this.formatApiError(err));
@@ -598,7 +710,9 @@ export default {
     async deleteProduct(id) {
       if (confirm('Archive this product?')) {
         await axios.delete(`/api/products/${id}/`);
+        clearCacheByPrefix('products:');
         this.products = this.products.filter(x => x.id !== id);
+        this.totalCount = Math.max(0, this.totalCount - 1);
       }
     },
     handleImageUpload(ev) {
@@ -800,6 +914,11 @@ export default {
 .modal-fade-enter-to, .modal-fade-leave-from {
   opacity: 1;
   transform: translateY(0);
+}
+
+.history-modal-body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 
 .table td, .table th {

@@ -22,7 +22,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import axios from '../axios'
 
 export default {
   name: 'ForgotPasswordPage',
@@ -38,7 +38,7 @@ export default {
       this.message = ''
       this.error = ''
       try {
-        await axios.post('http://localhost:8000/api/auth/forgot-password/', {
+        await axios.post('/api/auth/forgot-password/', {
           email: this.email.toLowerCase()
         })
         this.message = 'Reset code sent to your email.'

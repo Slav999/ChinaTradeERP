@@ -4,7 +4,7 @@ from .models import Counterparty, CounterpartyStatus
 
 @admin.register(Counterparty)
 class CounterpartyAdmin(admin.ModelAdmin):
-    list_display = ['name', 'type', 'unique_code', 'address', 'qr_code_image']
+    list_display = ['name', 'type', 'is_supplier', 'is_customer', 'unique_code', 'address', 'qr_code_image']
     search_fields = ['name', 'type', 'unique_code', 'address', 'qr_code_image']
 
 

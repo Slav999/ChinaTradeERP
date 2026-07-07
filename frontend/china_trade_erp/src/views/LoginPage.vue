@@ -42,7 +42,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import axios, { AUTH_SESSION_KEY } from '../axios'
 
 export default {
   name: 'LoginPage',
@@ -70,13 +70,12 @@ export default {
       this.form.email = this.form.email.toLowerCase()
 
       try {
-        const response = await axios.post('http://localhost:8000/api/auth/login/', this.form)
-        const access = response.data.access;
-        const refresh = response.data.refresh;
-        localStorage.setItem('access_token', access);
-        localStorage.setItem('refresh_token', refresh);
+        await axios.post('/api/auth/login/', this.form)
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+        localStorage.setItem(AUTH_SESSION_KEY, '1')
 
-        this.$router.push('/me')
+        this.$router.push(this.$route.query.next || '/supplier-orders')
       } catch (err) {
         this.serverError = err.response?.data?.detail || 'Login failed.'
       }

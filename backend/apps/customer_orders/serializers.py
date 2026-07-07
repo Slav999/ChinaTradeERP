@@ -42,11 +42,42 @@ class CustomerOrderItemSerializer(serializers.ModelSerializer):
         model = CustomerOrderItem
         fields = ('id', 'order', 'product', 'product_id', 'quantity', 'unit', 'comment')
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            company = request.user.company
+            self.fields['order'].queryset = CustomerOrder.objects.filter(
+                customer__company=company
+            )
+            self.fields['product_id'].queryset = Product.objects.filter(
+                supplier__company=company
+            )
+
 
 class CustomerOrderAttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerOrderAttachment
         fields = ('id', 'file', 'uploaded_at')
+
+
+class OrderCounterpartySummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Counterparty
+        fields = ('id', 'name')
+
+
+class CustomerOrderListSerializer(serializers.ModelSerializer):
+    customer = OrderCounterpartySummarySerializer(read_only=True)
+    status = CustomerOrderStatusSerializer(read_only=True)
+
+    class Meta:
+        model = CustomerOrder
+        fields = (
+            'id', 'order_number', 'customer',
+            'planned_receipt_date', 'shipment_date',
+            'shipping_code', 'status'
+        )
 
 
 class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSerializer):
@@ -75,6 +106,12 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
             'shipping_address', 'shipping_code',
             'items', 'attachments',
         )
+
+    def validate(self, attrs):
+        customer = attrs.get('customer', getattr(self.instance, 'customer', None))
+        if customer and not customer.is_customer:
+            raise serializers.ValidationError({'customer_id': 'Selected counterparty is not marked as a customer.'})
+        return attrs
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])

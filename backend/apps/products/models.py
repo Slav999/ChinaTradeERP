@@ -5,6 +5,18 @@ from core.models import BaseModel, ChangeLog
 from decimal import Decimal
 
 
+DEFAULT_COMPANY_SETTINGS = {
+    'cny_to_local_rate': Decimal('1.000000'),
+    'usd_to_local_rate': Decimal('1.000000'),
+    'logistics_cost_per_kg_usd': Decimal('0.00'),
+    'retail_tax_pct': Decimal('0.08'),
+    'acquiring_pct': Decimal('0.01'),
+    'packaging_pct': Decimal('0.01'),
+    'margin_pct': Decimal('0.50'),
+    'discount_pct': Decimal('0.10'),
+}
+
+
 class ProductCategory(models.Model):
     name = models.CharField(max_length=100)
 
@@ -19,17 +31,25 @@ class Unit(models.Model):
         return self.name
 
 
-class GlobalSettings(models.Model):
+class CompanySettings(models.Model):
+    company = models.OneToOneField(
+        'users.Company',
+        on_delete=models.CASCADE,
+        related_name='product_settings',
+    )
     cny_to_local_rate = models.DecimalField(
         "CNY → Local Rate", max_digits=12, decimal_places=6,
+        default=DEFAULT_COMPANY_SETTINGS['cny_to_local_rate'],
         help_text="Local currency units per 1 CNY"
     )
     usd_to_local_rate = models.DecimalField(
         "USD → Local Rate", max_digits=12, decimal_places=6,
+        default=DEFAULT_COMPANY_SETTINGS['usd_to_local_rate'],
         help_text="Local currency units per 1 USD"
     )
     logistics_cost_per_kg_usd = models.DecimalField(
         "Logistics Cost (USD/kg)", max_digits=10, decimal_places=2,
+        default=DEFAULT_COMPANY_SETTINGS['logistics_cost_per_kg_usd'],
         help_text="Cost of logistics per kilogram in USD"
     )
     retail_tax_pct = models.DecimalField(
@@ -59,15 +79,16 @@ class GlobalSettings(models.Model):
     )
 
     def __str__(self):
-        return "Global Settings"
+        return f"{self.company.name} Settings"
+
+    @classmethod
+    def default_values(cls):
+        return DEFAULT_COMPANY_SETTINGS.copy()
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-        # Recalculate sale_price for all products after settings change
-        from .models import Product
-        settings = GlobalSettings.objects.first()
-        for product in Product.objects.all():
-            product.sale_price = product.calculate_sale_price(settings)
+        for product in Product.objects.filter(supplier__company=self.company):
+            product.sale_price = product.calculate_sale_price(self)
             product.save(update_fields=['sale_price'])
 
 
@@ -126,7 +147,7 @@ class Product(BaseModel):
         related_name='archived_products'
     )
 
-    def calculate_sale_price(self, settings: GlobalSettings) -> Decimal:
+    def calculate_sale_price(self, settings: CompanySettings) -> Decimal:
         """
         1) Стоимость единицы в локальной валюте
         2) Стоимость коробки

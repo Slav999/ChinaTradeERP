@@ -40,16 +40,19 @@ class CreateSupplierOrdersTests(APITestCase):
             company=self.company,
             name='Customer',
             type='local',
+            is_customer=True,
         )
         self.supplier_a = Counterparty.objects.create(
             company=self.company,
             name='Supplier A',
             type='china',
+            is_supplier=True,
         )
         self.supplier_b = Counterparty.objects.create(
             company=self.company,
             name='Supplier B',
             type='china',
+            is_supplier=True,
         )
         self.product_a = Product.objects.create(
             name='Product A',
@@ -147,6 +150,7 @@ class CreateSupplierOrdersTests(APITestCase):
             company=self.company,
             name='Supplier C',
             type='china',
+            is_supplier=True,
         )
         product_c = Product.objects.create(
             name='Product C',

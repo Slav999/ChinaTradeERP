@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db.models import Q
 from .models import (
     SupplierOrder,
     SupplierOrderStatus,
@@ -51,11 +52,44 @@ class SupplierOrderItemSerializer(serializers.ModelSerializer):
         model = SupplierOrderItem
         fields = ('id', 'order', 'product', 'product_id', 'quantity', 'unit', 'comment')
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            company = request.user.company
+            self.fields['order'].queryset = SupplierOrder.objects.filter(
+                Q(supplier__company=company) | Q(customer__company=company)
+            )
+            self.fields['product_id'].queryset = Product.objects.filter(
+                supplier__company=company
+            )
+
 
 class SupplierOrderAttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierOrderAttachment
         fields = ('id', 'file', 'uploaded_at')
+
+
+class OrderCounterpartySummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Counterparty
+        fields = ('id', 'name')
+
+
+class SupplierOrderListSerializer(serializers.ModelSerializer):
+    supplier = OrderCounterpartySummarySerializer(read_only=True)
+    customer = OrderCounterpartySummarySerializer(read_only=True)
+    status = SupplierOrderStatusSerializer(read_only=True)
+    payment_details_qr = serializers.ImageField(read_only=True)
+
+    class Meta:
+        model = SupplierOrder
+        fields = (
+            'id', 'order_number', 'supplier', 'customer',
+            'planned_receipt_date', 'shipment_date', 'delivery_date',
+            'amount_cny', 'status', 'payment_details_qr', 'track_number'
+        )
 
 
 class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSerializer):
@@ -97,6 +131,16 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
             'payment_details_qr',
             'items', 'attachments',
         )
+
+    def validate(self, attrs):
+        supplier = attrs.get('supplier', getattr(self.instance, 'supplier', None))
+        customer = attrs.get('customer', getattr(self.instance, 'customer', None))
+
+        if supplier and not supplier.is_supplier:
+            raise serializers.ValidationError({'supplier_id': 'Selected counterparty is not marked as a supplier.'})
+        if customer and not customer.is_customer:
+            raise serializers.ValidationError({'customer_id': 'Selected counterparty is not marked as a customer.'})
+        return attrs
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])

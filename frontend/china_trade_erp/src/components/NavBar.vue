@@ -23,32 +23,55 @@
       <div class="collapse navbar-collapse w-100 justify-content-end" id="navbarNav">
         <ul class="navbar-nav d-flex w-100 flex-row justify-content-around justify-content-lg-end">
           <li class="nav-item mx-lg-3">
-            <RouterLink to="/supplier-orders" class="nav-link text-center">
+            <RouterLink
+                to="/supplier-orders"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/supplier-orders') }"
+            >
               <i class="bi bi-truck fs-4"></i>
               <div class="small mt-1 d-none d-lg-block">Supplier Orders</div>
             </RouterLink>
           </li>
           <li class="nav-item mx-lg-3">
-            <RouterLink to="/customer-orders" class="nav-link text-center">
+            <RouterLink
+                to="/customer-orders"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/customer-orders') }"
+            >
               <i class="bi bi-cart-check fs-4"></i>
               <div class="small mt-1 d-none d-lg-block">Customer Orders</div>
             </RouterLink>
           </li>
           <li class="nav-item mx-lg-3">
-            <RouterLink to="/products" class="nav-link text-center">
+            <RouterLink
+                to="/products"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/products') }"
+            >
               <i class="bi bi-box-seam fs-4"></i>
               <div class="small mt-1 d-none d-lg-block">Products</div>
             </RouterLink>
           </li>
           <li class="nav-item mx-lg-3">
-            <RouterLink to="/counterparty" class="nav-link text-center">
+            <RouterLink
+                to="/counterparty"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/counterparty') }"
+            >
               <i class="bi bi-people fs-4"></i>
               <div class="small mt-1 d-none d-lg-block">Counterparties</div>
             </RouterLink>
           </li>
           <li class="nav-item mx-lg-3">
-            <RouterLink to="/profile" class="nav-link text-center">
-              <i class="bi bi-person-circle fs-4"></i>
+            <RouterLink
+                to="/profile"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/profile') }"
+            >
+              <span class="profile-icon-slot">
+                <img v-if="avatarSrc" :src="avatarSrc" class="nav-avatar" alt="Profile" />
+                <span v-else class="nav-avatar avatar-placeholder">{{ initials }}</span>
+              </span>
               <div class="small mt-1 d-none d-lg-block">Profile</div>
             </RouterLink>
           </li>
@@ -59,13 +82,64 @@
 </template>
 
 <script>
+import axios, { AUTH_SESSION_KEY } from '../axios'
 import logo from '../assets/logo.png'
+
+const API_ORIGIN = 'http://localhost:8000'
 
 export default {
   name: 'NavBar',
   data() {
     return {
-      logo
+      logo,
+      profile: this.readCachedProfile()
+    }
+  },
+  computed: {
+    avatarSrc() {
+      return this.mediaUrl(this.profile?.avatar);
+    },
+    initials() {
+      const first = this.profile?.first_name || this.profile?.username || '';
+      const last = this.profile?.last_name || '';
+      return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || 'U';
+    }
+  },
+  mounted() {
+    this.fetchProfile();
+    window.addEventListener('profile-updated', this.handleProfileUpdated);
+  },
+  beforeUnmount() {
+    window.removeEventListener('profile-updated', this.handleProfileUpdated);
+  },
+  methods: {
+    readCachedProfile() {
+      try {
+        return JSON.parse(localStorage.getItem('current_user_profile')) || {};
+      } catch {
+        return {};
+      }
+    },
+    async fetchProfile() {
+      if (!localStorage.getItem(AUTH_SESSION_KEY)) return;
+      try {
+        const { data } = await axios.get('/api/auth/me/');
+        this.handleProfileUpdated({ detail: data });
+      } catch {
+        this.profile = this.readCachedProfile();
+      }
+    },
+    handleProfileUpdated(event) {
+      this.profile = event.detail || {};
+      localStorage.setItem('current_user_profile', JSON.stringify(this.profile));
+    },
+    mediaUrl(value) {
+      if (!value) return '';
+      if (value.startsWith('http')) return value;
+      return new URL(value, API_ORIGIN).href;
+    },
+    isSectionActive(path) {
+      return this.$route.path === path || this.$route.path.startsWith(`${path}/`);
     }
   }
 }
@@ -78,13 +152,42 @@ export default {
   transition: color .2s;
 }
 .navbar-nav .nav-link:hover,
-.navbar-nav .nav-link.router-link-active {
+.navbar-nav .nav-link.router-link-active,
+.navbar-nav .nav-link.section-active {
   color: #0d6efd;
 }
 
 /* Адаптивная высота логотипа */
 .logo-img {
   height: 100px;
+}
+
+.profile-icon-slot {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: top;
+}
+
+.nav-avatar {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  object-fit: cover;
+  border: 1px solid #dee2e6;
+  border-radius: 50%;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.avatar-placeholder {
+  color: #495057;
+  background: #f1f3f5;
 }
 
 @media (max-width: 992px) {

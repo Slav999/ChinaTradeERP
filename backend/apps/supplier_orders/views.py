@@ -7,11 +7,13 @@ from .models import (SupplierOrder, SupplierOrderStatus, SupplierOrderChangeLog,
                      SupplierOrderItem)
 from .serializers import (
     SupplierOrderSerializer,
+    SupplierOrderListSerializer,
     SupplierOrderStatusSerializer,
     SupplierOrderChangeLogSerializer,
     SupplierOrderItemSerializer,
     SupplierOrderAttachmentSerializer
 )
+from core.pagination import StandardResultsSetPagination
 import io
 from django.conf import settings
 from django.core.mail import EmailMessage
@@ -26,14 +28,45 @@ from customer_orders.services.create_supplier_orders import build_supplier_order
 class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     queryset = SupplierOrder.objects.all()
     serializer_class = SupplierOrderSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user_company = self.request.user.company
-        return SupplierOrder.objects.filter(
+        queryset = SupplierOrder.objects.filter(
             Q(supplier__company=user_company) |
             Q(customer__company=user_company)
+        ).select_related(
+            'supplier', 'customer', 'status', 'customer_order'
         )
+
+        search = self.request.query_params.get('search', '').strip()
+        supplier_id = self.request.query_params.get('supplier')
+        supplier_query = self.request.query_params.get('supplier_query', '').strip()
+        customer_id = self.request.query_params.get('customer')
+        customer_query = self.request.query_params.get('customer_query', '').strip()
+        status_id = self.request.query_params.get('status')
+
+        if search:
+            queryset = queryset.filter(
+                Q(order_number__icontains=search) |
+                Q(supplier__name__icontains=search) |
+                Q(customer__name__icontains=search) |
+                Q(track_number__icontains=search) |
+                Q(shipping_code__icontains=search)
+            )
+        if supplier_id:
+            queryset = queryset.filter(supplier_id=supplier_id)
+        if supplier_query:
+            queryset = queryset.filter(supplier__name__icontains=supplier_query)
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        if customer_query:
+            queryset = queryset.filter(customer__name__icontains=customer_query)
+        if status_id:
+            queryset = queryset.filter(status_id=status_id)
+
+        return queryset
 
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):
@@ -141,6 +174,8 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     def get_serializer_class(self):
         if self.action == 'history':
             return SupplierOrderChangeLogSerializer
+        if self.action == 'list':
+            return SupplierOrderListSerializer
         return super().get_serializer_class()
 
 
@@ -150,13 +185,16 @@ class SupplierOrderItemViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        user_company = self.request.user.company
+        queryset = self.queryset.filter(
+            Q(order__supplier__company=user_company) |
+            Q(order__customer__company=user_company)
+        ).select_related('order', 'product', 'product__unit')
+
         order_id = self.request.query_params.get('order')
         if order_id:
-            return self.queryset.filter(
-                order_id=order_id,
-                order__supplier__company=self.request.user.company
-            )
-        return self.queryset
+            queryset = queryset.filter(order_id=order_id)
+        return queryset
 
 
 class SupplierOrderStatusViewSet(viewsets.ReadOnlyModelViewSet):

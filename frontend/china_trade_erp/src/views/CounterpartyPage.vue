@@ -13,15 +13,22 @@
             placeholder="Search by name/code/email..."
         />
       </div>
-      <div class="col-md-3">
-        <select v-model="filters.type" class="form-select">
-          <option disabled selected hidden value="">Select type...</option>
+      <div class="col-md-2">
+        <select v-model="filters.type" class="form-select" @change="onFiltersChanged">
+          <option disabled selected hidden value="">Select region...</option>
           <option value="china">Chinese</option>
           <option value="local">Local</option>
         </select>
       </div>
-      <div class="col-md-3">
-        <select v-model="filters.status" class="form-select">
+      <div class="col-md-2">
+        <select v-model="filters.role" class="form-select" @change="onFiltersChanged">
+          <option disabled selected hidden value="">Select role...</option>
+          <option value="supplier">Supplier</option>
+          <option value="customer">Customer</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <select v-model="filters.status" class="form-select" @change="onFiltersChanged">
           <option disabled selected hidden value="">Select status...</option>
           <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
@@ -42,7 +49,8 @@
         <thead class="table-light">
         <tr>
           <th>Name</th>
-          <th>Type</th>
+          <th>Region</th>
+          <th>Roles</th>
           <th class="d-none d-md-table-cell">Phone</th>
           <th class="d-none d-md-table-cell">Email</th>
           <th class="d-none d-lg-table-cell">Source</th>
@@ -54,7 +62,7 @@
         </thead>
         <tbody>
         <tr
-            v-for="item in filteredCounterparties"
+            v-for="item in counterparties"
             :key="item.id"
             @click="editCounterparty(item)"
             style="cursor: pointer;"
@@ -64,6 +72,11 @@
               <span :class="['badge', item.type === 'china' ? 'bg-success' : 'bg-secondary']">
                 {{ item.type === 'china' ? 'Chinese' : 'Local' }}
               </span>
+          </td>
+          <td>
+            <span v-if="item.is_supplier" class="badge bg-primary me-1">Supplier</span>
+            <span v-if="item.is_customer" class="badge bg-info text-dark">Customer</span>
+            <span v-if="!item.is_supplier && !item.is_customer" class="text-muted">—</span>
           </td>
           <td class="d-none d-md-table-cell">{{ item.phone || '—' }}</td>
           <td class="d-none d-md-table-cell">{{ item.email || '—' }}</td>
@@ -92,11 +105,31 @@
             </button>
           </td>
         </tr>
-        <tr v-if="!filteredCounterparties.length">
-          <td colspan="9" class="text-center text-muted">No counterparties yet.</td>
+        <tr v-if="isLoading">
+          <td colspan="10" class="text-center text-muted">Loading...</td>
+        </tr>
+        <tr v-else-if="!counterparties.length">
+          <td colspan="10" class="text-center text-muted">No counterparties yet.</td>
         </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+      <div class="text-muted small">
+        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
+          Previous
+        </button>
+        <button class="btn btn-outline-secondary btn-sm disabled">
+          Page {{ page }} / {{ totalPages }}
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
+          Next
+        </button>
+      </div>
     </div>
 
     <!-- Add/Edit Modal -->
@@ -117,7 +150,7 @@
               <!-- Audit Block -->
               <div
                   v-if="isEdit"
-                  class="audit-info mb-3 p-3 bg-light rounded border"
+                  class="audit-info mt-3 mb-3 p-3 bg-light rounded border"
                   @click="openHistory"
                   style="cursor: pointer;"
               >
@@ -146,11 +179,34 @@
                     <input v-model="counterpartyForm.name" type="text" class="form-control" required/>
                   </div>
                   <div class="col-md-6">
-                    <label class="form-label">Type</label>
+                    <label class="form-label">Region</label>
                     <select v-model="counterpartyForm.type" class="form-select">
                       <option value="china">Chinese</option>
                       <option value="local">Local</option>
                     </select>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Roles</label>
+                    <div class="d-flex flex-wrap gap-3">
+                      <div class="form-check">
+                        <input
+                            id="counterpartyIsSupplier"
+                            v-model="counterpartyForm.is_supplier"
+                            class="form-check-input"
+                            type="checkbox"
+                        />
+                        <label class="form-check-label" for="counterpartyIsSupplier">Supplier</label>
+                      </div>
+                      <div class="form-check">
+                        <input
+                            id="counterpartyIsCustomer"
+                            v-model="counterpartyForm.is_customer"
+                            class="form-check-input"
+                            type="checkbox"
+                        />
+                        <label class="form-check-label" for="counterpartyIsCustomer">Customer</label>
+                      </div>
+                    </div>
                   </div>
                   <div class="col-md-6">
                     <label class="form-label">Unique Code</label>
@@ -208,14 +264,14 @@
         :style="showHistoryModal ? 'display: block;' : ''"
         tabindex="-1"
     >
-      <div class="modal-dialog modal-dialog-scrollable modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
         <transition name="modal-fade">
           <div class="modal-content" v-if="showHistoryContent">
             <div class="modal-header">
               <h5 class="modal-title">Change History</h5>
               <button type="button" class="btn-close" @click="closeHistory"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body history-modal-body">
               <table v-if="historyLogs.length" class="table table-striped">
                 <thead>
                 <tr>
@@ -277,6 +333,10 @@
 <script>
 import axios from '../axios';
 import debounce from 'lodash/debounce';
+import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+
+const TABLE_STATE_KEY = 'counterparties-table-state';
+const PAGE_SIZE = 50;
 
 export default {
   name: 'CounterpartyView',
@@ -295,11 +355,17 @@ export default {
       historyLogs: [],
       showHistoryModal: false,
       searchQuery: '',
-      filters: {type: '', status: ''},
+      filters: {type: '', role: '', status: ''},
+      page: 1,
+      pageSize: PAGE_SIZE,
+      totalCount: 0,
+      isLoading: false,
       defaultForm: {
         id: null,
         name: '',
-        type: '',
+        type: 'local',
+        is_supplier: false,
+        is_customer: true,
         unique_code: '',
         address: '',
         phone: '',
@@ -317,39 +383,115 @@ export default {
   },
   created() {
     this.resetForm();
-    this.fetchCounterparties();
+    this.restoreTableState();
+    this.fetchCounterparties({ useCache: true });
     this.fetchStatuses();
   },
   computed: {
-    filteredCounterparties() {
-      const q = this.searchQuery.trim().toLowerCase();
-      return this.counterparties.filter(c => {
-        const text = `${c.name} ${c.email || ''} ${c.unique_code}`.toLowerCase();
-        const matchQuery = !q || text.includes(q);
-        const matchType = !this.filters.type || c.type === this.filters.type;
-        const matchStatus = !this.filters.status || c.status?.id === +this.filters.status;
-        return matchQuery && matchType && matchStatus;
-      });
+    totalPages() {
+      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+    },
+    pageStart() {
+      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+    },
+    pageEnd() {
+      return Math.min(this.page * this.pageSize, this.totalCount);
     }
   },
   methods: {
     onSearchInput: debounce(function () {
-      // debounced, no extra logic needed
+      this.onFiltersChanged();
     }, 300),
+    onFiltersChanged() {
+      this.page = 1;
+      this.saveTableState();
+      this.fetchCounterparties();
+    },
     resetFilters() {
       this.searchQuery = '';
-      this.filters = {type: '', status: ''};
+      this.filters = {type: '', role: '', status: ''};
+      this.page = 1;
+      this.saveTableState();
+      this.fetchCounterparties();
     },
     resetForm() {
       this.counterpartyForm = {...this.defaultForm};
     },
-    async fetchCounterparties() {
-      const res = await axios.get('/api/counterparties/');
-      this.counterparties = res.data;
+    async fetchCounterparties({ useCache = false } = {}) {
+      const cacheKey = this.counterpartiesCacheKey();
+      const cached = useCache ? getCachedJson(cacheKey) : null;
+      if (cached) {
+        this.applyCounterpartiesResponse(cached);
+      }
+
+      this.isLoading = !cached;
+      try {
+        const res = await axios.get('/api/counterparties/', {
+          params: this.counterpartyQueryParams()
+        });
+        setCachedJson(cacheKey, res.data);
+        this.applyCounterpartiesResponse(res.data);
+        this.isLoading = false;
+      } catch (e) {
+        console.error(e);
+        this.isLoading = false;
+      }
     },
     async fetchStatuses() {
+      const cached = getCachedJson('counterparty-statuses');
+      if (cached) {
+        this.statuses = cached;
+        return;
+      }
+
       const res = await axios.get('/api/counterparty-statuses/');
       this.statuses = res.data;
+      setCachedJson('counterparty-statuses', this.statuses);
+    },
+    counterpartyQueryParams() {
+      return {
+        page: this.page,
+        page_size: this.pageSize,
+        search: this.searchQuery || undefined,
+        type: this.filters.type || undefined,
+        role: this.filters.role || undefined,
+        status: this.filters.status || undefined,
+      };
+    },
+    counterpartiesCacheKey() {
+      return `counterparties:${JSON.stringify(this.counterpartyQueryParams())}`;
+    },
+    applyCounterpartiesResponse(data) {
+      const page = paginatedResults(data);
+      this.counterparties = page.results;
+      this.totalCount = page.count;
+    },
+    saveTableState() {
+      setSavedState(TABLE_STATE_KEY, {
+        page: this.page,
+        searchQuery: this.searchQuery,
+        filters: this.filters,
+      });
+    },
+    restoreTableState() {
+      const state = getSavedState(TABLE_STATE_KEY, {
+        page: 1,
+        searchQuery: '',
+        filters: {type: '', role: '', status: ''},
+      });
+      this.page = state.page;
+      this.searchQuery = state.searchQuery;
+      this.filters = {
+        type: state.filters?.type || '',
+        role: state.filters?.role || '',
+        status: state.filters?.status || '',
+      };
+    },
+    changePage(page) {
+      if (page < 1 || page > this.totalPages || page === this.page) return;
+      this.page = page;
+      this.saveTableState();
+      this.fetchCounterparties({ useCache: true });
     },
     openModal() {
       this.resetForm();
@@ -390,7 +532,10 @@ export default {
           res = await axios.post('/api/counterparties/', formData, cfg);
           this.counterparties.unshift(res.data);
         }
+        clearCacheByPrefix('counterparties:');
+        clearCacheByPrefix('counterparty-options');
         this.closeModal();
+        this.fetchCounterparties();
       } catch (err) {
         console.error('Save error:', err.response?.data || err);
       }
@@ -398,7 +543,10 @@ export default {
     async deleteCounterparty(id) {
       if (confirm('Delete this counterparty?')) {
         await axios.delete(`/api/counterparties/${id}/`);
+        clearCacheByPrefix('counterparties:');
+        clearCacheByPrefix('counterparty-options');
         this.counterparties = this.counterparties.filter(x => x.id !== id);
+        this.totalCount = Math.max(0, this.totalCount - 1);
       }
     },
     showQr(url) {
@@ -434,7 +582,9 @@ export default {
     fieldLabel(key) {
       const map = {
         name: 'Name',
-        type: 'Type',
+        type: 'Region',
+        is_supplier: 'Supplier role',
+        is_customer: 'Customer role',
         address: 'Address',
         phone: 'Phone',
         email: 'Email',
@@ -487,5 +637,10 @@ export default {
 .modal-fade-leave-from {
   opacity: 1;
   transform: translateY(0);
+}
+
+.history-modal-body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 </style>

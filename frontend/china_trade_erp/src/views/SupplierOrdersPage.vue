@@ -7,19 +7,30 @@
       <div class="col-md-4">
         <input
             v-model.trim="searchQuery"
+            @input="onFiltersChanged"
             type="text"
             class="form-control"
             placeholder="Search by order#, supplier, track..."
         />
       </div>
-      <div class="col-md-3">
-        <select v-model="filters.supplier" class="form-select">
-          <option disabled value="">Select supplier...</option>
-          <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
+      <div class="col-md-2">
+        <AutocompleteInput
+            v-model.trim="filters.supplierQuery"
+            @input="onFiltersChanged"
+            :options="suppliers"
+            placeholder="Supplier..."
+        />
       </div>
-      <div class="col-md-3">
-        <select v-model="filters.status" class="form-select">
+      <div class="col-md-2">
+        <AutocompleteInput
+            v-model.trim="filters.customerQuery"
+            @input="onFiltersChanged"
+            :options="customers"
+            placeholder="Customer..."
+        />
+      </div>
+      <div class="col-md-2">
+        <select v-model="filters.status" class="form-select" @change="onFiltersChanged">
           <option disabled value="">Select status...</option>
           <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
@@ -61,7 +72,7 @@
         </thead>
         <tbody>
         <tr
-            v-for="item in filteredOrders"
+            v-for="item in orders"
             :key="item.id"
             @click="editOrder(item)"
             style="cursor: pointer;"
@@ -93,24 +104,74 @@
             </button>
           </td>
         </tr>
-        <tr v-if="!filteredOrders.length">
+        <tr v-if="isLoading">
+          <td colspan="9" class="text-center text-muted">Loading...</td>
+        </tr>
+        <tr v-else-if="!orders.length">
           <td colspan="9" class="text-center text-muted">No orders yet.</td>
         </tr>
         </tbody>
       </table>
     </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+      <div class="text-muted small">
+        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
+          Previous
+        </button>
+        <button class="btn btn-outline-secondary btn-sm disabled">
+          Page {{ page }} / {{ totalPages }}
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
+          Next
+        </button>
+      </div>
     </div>
+
+    <!-- QR Preview Modal -->
+    <div
+        class="modal fade"
+        :class="{ show: !!qrModalUrl }"
+        :style="qrModalUrl ? 'display: block;' : ''"
+        tabindex="-1"
+    >
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <transition name="modal-fade">
+          <div class="modal-content" v-if="showQrContent && qrModalUrl">
+            <div class="modal-header">
+              <h6 class="modal-title">QR Code</h6>
+              <button type="button" class="btn-close" @click="closeQr"></button>
+            </div>
+            <div class="modal-body text-center">
+              <img :src="qrModalUrl" class="img-fluid" style="max-height: 80vh;" alt="QR code"/>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </div>
+    <div class="modal-backdrop fade" :class="{ show: !!qrModalUrl }"></div>
+  </div>
 </template>
 
 <script>
 import axios from '../axios';
+import AutocompleteInput from '../components/AutocompleteInput.vue';
+import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+
+const TABLE_STATE_KEY = 'supplier-orders-table-state';
+const PAGE_SIZE = 50;
 
 export default {
   name: 'SupplierOrdersPage',
+  components: { AutocompleteInput },
   data() {
     return {
       /* справочники */
       suppliers: [],
+      customers: [],
       statuses: [],
 
       /* список заказов */
@@ -118,7 +179,14 @@ export default {
 
       /* фильтрация */
       searchQuery: '',
-      filters: { supplier: '', status: '' },
+      filters: { supplierQuery: '', customerQuery: '', status: '' },
+      page: 1,
+      pageSize: PAGE_SIZE,
+      totalCount: 0,
+      isLoading: false,
+      searchTimer: null,
+      showQrContent: true,
+      qrModalUrl: null,
     };
   },
 
@@ -126,20 +194,21 @@ export default {
     highlightId() {
       return this.$route.query.highlight ? +this.$route.query.highlight : null;
     },
-    filteredOrders() {
-      const q = this.searchQuery.toLowerCase().trim();
-      return this.orders.filter(o => {
-        const text = `${o.order_number} ${o.supplier?.name || ''} ${o.track_number || ''}`.toLowerCase();
-        return (!q || text.includes(q))
-          && (!this.filters.supplier || o.supplier?.id === +this.filters.supplier)
-          && (!this.filters.status   || o.status?.id   === +this.filters.status);
-      });
+    totalPages() {
+      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+    },
+    pageStart() {
+      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+    },
+    pageEnd() {
+      return Math.min(this.page * this.pageSize, this.totalCount);
     },
   },
 
   created() {
+    this.restoreTableState();
     this.fetchAux();
-    this.fetchOrders();
+    this.fetchOrders({ useCache: true });
   },
 
   methods: {
@@ -165,26 +234,126 @@ export default {
     /* --- API --- */
     async fetchAux() {
       try {
-        const [cpRes, stRes] = await Promise.all([
-          axios.get('/api/counterparties/'),
-          axios.get('/api/supplier-order-statuses/')
-        ]);
-        this.suppliers = cpRes.data;
-        this.statuses  = stRes.data;
+        const cachedSuppliers = getCachedJson('counterparty-options:supplier');
+        const cachedCustomers = getCachedJson('counterparty-options:customer');
+        const cachedStatuses = getCachedJson('supplier-order-statuses');
+
+        if (cachedSuppliers) this.suppliers = cachedSuppliers;
+        if (cachedCustomers) this.customers = cachedCustomers;
+        if (cachedStatuses) this.statuses = cachedStatuses;
+
+        const requests = [];
+        if (!cachedSuppliers) requests.push(axios.get('/api/counterparties/options/', { params: { role: 'supplier' } }));
+        if (!cachedCustomers) requests.push(axios.get('/api/counterparties/options/', { params: { role: 'customer' } }));
+        if (!cachedStatuses) requests.push(axios.get('/api/supplier-order-statuses/'));
+
+        const responses = await Promise.all(requests);
+        let idx = 0;
+        if (!cachedSuppliers) {
+          this.suppliers = responses[idx].data;
+          setCachedJson('counterparty-options:supplier', this.suppliers);
+          idx += 1;
+        }
+        if (!cachedCustomers) {
+          this.customers = responses[idx].data;
+          setCachedJson('counterparty-options:customer', this.customers);
+          idx += 1;
+        }
+        if (!cachedStatuses) {
+          this.statuses = responses[idx].data;
+          setCachedJson('supplier-order-statuses', this.statuses);
+        }
       } catch (e) {
         console.error(e); alert('Ошибка при загрузке справочников');
       }
     },
-    async fetchOrders() {
-      try { this.orders = (await axios.get('/api/supplier-order/')).data; }
-      catch (e) { console.error(e); alert('Не удалось загрузить заказы'); }
+    async fetchOrders({ useCache = false } = {}) {
+      const cacheKey = this.ordersCacheKey();
+      const cached = useCache ? getCachedJson(cacheKey) : null;
+      if (cached) {
+        this.applyOrdersResponse(cached);
+      }
+
+      this.isLoading = !cached;
+      try {
+        const res = await axios.get('/api/supplier-order/', {
+          params: this.orderQueryParams()
+        });
+        setCachedJson(cacheKey, res.data);
+        this.applyOrdersResponse(res.data);
+      } catch (e) {
+        console.error(e);
+        alert('Unable to load orders');
+      } finally {
+        this.isLoading = false;
+      }
     },
 
     /* --- утилиты --- */
     formatDate(v) { return v ? new Date(v).toLocaleDateString() : '—'; },
-    resetFilters() { this.searchQuery=''; this.filters={ supplier:'', status:'' }; },
+    resetFilters() {
+      this.searchQuery='';
+      this.filters={ supplierQuery:'', customerQuery:'', status:'' };
+      this.page = 1;
+      this.saveTableState();
+      this.fetchOrders();
+    },
 
     /* --- переходы --- */
+    orderQueryParams() {
+      return {
+        page: this.page,
+        page_size: this.pageSize,
+        search: this.searchQuery || undefined,
+        supplier_query: this.filters.supplierQuery || undefined,
+        customer_query: this.filters.customerQuery || undefined,
+        status: this.filters.status || undefined,
+      };
+    },
+    ordersCacheKey() {
+      return `supplier-orders:${JSON.stringify(this.orderQueryParams())}`;
+    },
+    applyOrdersResponse(data) {
+      const page = paginatedResults(data);
+      this.orders = page.results;
+      this.totalCount = page.count;
+    },
+    saveTableState() {
+      setSavedState(TABLE_STATE_KEY, {
+        page: this.page,
+        searchQuery: this.searchQuery,
+        filters: this.filters,
+      });
+    },
+    restoreTableState() {
+      const state = getSavedState(TABLE_STATE_KEY, {
+        page: 1,
+        searchQuery: '',
+        filters: { supplierQuery: '', customerQuery: '', status: '' },
+      });
+      this.page = state.page;
+      this.searchQuery = state.searchQuery;
+      this.filters = {
+        supplierQuery: state.filters?.supplierQuery || '',
+        customerQuery: state.filters?.customerQuery || '',
+        status: state.filters?.status || '',
+      };
+    },
+    onFiltersChanged() {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = window.setTimeout(() => {
+        this.page = 1;
+        this.saveTableState();
+        this.fetchOrders();
+      }, 300);
+    },
+    changePage(page) {
+      if (page < 1 || page > this.totalPages || page === this.page) return;
+      this.page = page;
+      this.saveTableState();
+      this.fetchOrders({ useCache: true });
+    },
+
     openModal()          { this.$router.push('/supplier-orders/new'); },
     editOrder(order)     { this.$router.push(`/supplier-orders/${order.id}`); },
 
@@ -193,10 +362,46 @@ export default {
       if (!confirm('Удалить заказ?')) return;
       try {
         await axios.delete(`/api/supplier-order/${id}/`);
+        clearCacheByPrefix('supplier-orders:');
         this.orders = this.orders.filter(o => o.id !== id);
+        this.totalCount = Math.max(0, this.totalCount - 1);
       } catch (e) { console.error(e); alert('Ошибка при удалении'); }
     },
-    showQr(url) { window.open(url, '_blank'); }   // простейший предпросмотр
+    showQr(url) {
+      this.showQrContent = true;
+      this.qrModalUrl = url;
+    },
+    closeQr() {
+      this.showQrContent = false;
+      this.qrModalUrl = null;
+    }
   }
 };
 </script>
+
+<style scoped>
+.modal-backdrop {
+  display: none;
+}
+
+.modal-backdrop.show {
+  display: block;
+}
+
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.modal-fade-enter-to,
+.modal-fade-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+}
+</style>

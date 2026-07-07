@@ -12,11 +12,13 @@ from .models import (
 )
 from .serializers import (
     CustomerOrderSerializer,
+    CustomerOrderListSerializer,
     CustomerOrderStatusSerializer,
     CustomerOrderChangeLogSerializer,
     CustomerOrderItemSerializer,
     CustomerOrderAttachmentSerializer
 )
+from core.pagination import StandardResultsSetPagination
 from .services.create_supplier_orders import (
     SupplierOrderCreationError,
     build_customer_order_related_documents,
@@ -35,13 +37,36 @@ from django.http import FileResponse
 class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     queryset = CustomerOrder.objects.all()
     serializer_class = CustomerOrderSerializer
+    pagination_class = StandardResultsSetPagination
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user_company = self.request.user.company
-        return CustomerOrder.objects.filter(
+        queryset = CustomerOrder.objects.filter(
             customer__company=user_company
+        ).select_related(
+            'customer', 'status'
         )
+
+        search = self.request.query_params.get('search', '').strip()
+        customer_id = self.request.query_params.get('customer')
+        customer_query = self.request.query_params.get('customer_query', '').strip()
+        status_id = self.request.query_params.get('status')
+
+        if search:
+            queryset = queryset.filter(
+                Q(order_number__icontains=search) |
+                Q(customer__name__icontains=search) |
+                Q(shipping_code__icontains=search)
+            )
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        if customer_query:
+            queryset = queryset.filter(customer__name__icontains=customer_query)
+        if status_id:
+            queryset = queryset.filter(status_id=status_id)
+
+        return queryset
 
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):
@@ -176,6 +201,8 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     def get_serializer_class(self):
         if self.action == 'history':
             return CustomerOrderChangeLogSerializer
+        if self.action == 'list':
+            return CustomerOrderListSerializer
         return super().get_serializer_class()
 
 
@@ -185,13 +212,14 @@ class CustomerOrderItemViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        queryset = self.queryset.filter(
+            order__customer__company=self.request.user.company
+        ).select_related('order', 'product', 'product__unit')
+
         order_id = self.request.query_params.get('order')
         if order_id:
-            return self.queryset.filter(
-                order_id=order_id,
-                order__customer__company=self.request.user.company
-            )
-        return self.queryset
+            queryset = queryset.filter(order_id=order_id)
+        return queryset
 
 
 class CustomerOrderStatusViewSet(viewsets.ReadOnlyModelViewSet):

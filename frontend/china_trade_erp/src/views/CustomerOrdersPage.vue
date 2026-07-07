@@ -7,19 +7,22 @@
       <div class="col-md-4">
         <input
             v-model.trim="searchQuery"
+            @input="onFiltersChanged"
             type="text"
             class="form-control"
             placeholder="Search by order#, customer, track..."
         />
       </div>
       <div class="col-md-3">
-        <select v-model="filters.customer" class="form-select">
-          <option disabled value="">Select customer...</option>
-          <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+        <AutocompleteInput
+            v-model.trim="filters.customerQuery"
+            @input="onFiltersChanged"
+            :options="customers"
+            placeholder="Customer..."
+        />
       </div>
       <div class="col-md-3">
-        <select v-model="filters.status" class="form-select">
+        <select v-model="filters.status" class="form-select" @change="onFiltersChanged">
           <option disabled value="">Select status...</option>
           <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
@@ -56,7 +59,7 @@
         </thead>
         <tbody>
         <tr
-            v-for="item in filteredOrders"
+            v-for="item in orders"
             :key="item.id"
             @click="editOrder(item)"
             style="cursor: pointer;"
@@ -84,20 +87,46 @@
             </button>
           </td>
         </tr>
-        <tr v-if="!filteredOrders.length">
-          <td colspan="8" class="text-center text-muted">No orders yet.</td>
+        <tr v-if="isLoading">
+          <td colspan="5" class="text-center text-muted">Loading...</td>
+        </tr>
+        <tr v-else-if="!orders.length">
+          <td colspan="5" class="text-center text-muted">No orders yet.</td>
         </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+      <div class="text-muted small">
+        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
+          Previous
+        </button>
+        <button class="btn btn-outline-secondary btn-sm disabled">
+          Page {{ page }} / {{ totalPages }}
+        </button>
+        <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
+          Next
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
 import axios from '../axios';
+import AutocompleteInput from '../components/AutocompleteInput.vue';
+import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+
+const TABLE_STATE_KEY = 'customer-orders-table-state';
+const PAGE_SIZE = 50;
 
 export default {
   name: 'CustomerOrdersPage',
+  components: { AutocompleteInput },
   data() {
     return {
       /* справочники */
@@ -109,25 +138,31 @@ export default {
 
       /* фильтрация */
       searchQuery: '',
-      filters: {customer: '', status: ''},
+      filters: {customerQuery: '', status: ''},
+      page: 1,
+      pageSize: PAGE_SIZE,
+      totalCount: 0,
+      isLoading: false,
+      searchTimer: null,
     };
   },
 
   computed: {
-    filteredOrders() {
-      const q = this.searchQuery.toLowerCase().trim();
-      return this.orders.filter(o => {
-        const text = `${o.order_number} ${o.customer?.name || ''} ${o.track_number || ''}`.toLowerCase();
-        return (!q || text.includes(q))
-            && (!this.filters.customer || o.customer?.id === +this.filters.customer)
-            && (!this.filters.status || o.status?.id === +this.filters.status);
-      });
+    totalPages() {
+      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+    },
+    pageStart() {
+      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+    },
+    pageEnd() {
+      return Math.min(this.page * this.pageSize, this.totalCount);
     },
   },
 
   created() {
+    this.restoreTableState();
     this.fetchAux();
-    this.fetchOrders();
+    this.fetchOrders({ useCache: true });
   },
 
   methods: {
@@ -153,23 +188,51 @@ export default {
     /* --- API --- */
     async fetchAux() {
       try {
-        const [custRes, stRes] = await Promise.all([
-          axios.get('/api/counterparties/'),
-          axios.get('/api/customer-order-statuses/')
-        ]);
-        this.customers = custRes.data;
-        this.statuses = stRes.data;
+        const cachedCustomers = getCachedJson('counterparty-options:customer');
+        const cachedStatuses = getCachedJson('customer-order-statuses');
+
+        if (cachedCustomers) this.customers = cachedCustomers;
+        if (cachedStatuses) this.statuses = cachedStatuses;
+
+        const requests = [];
+        if (!cachedCustomers) requests.push(axios.get('/api/counterparties/options/', { params: { role: 'customer' } }));
+        if (!cachedStatuses) requests.push(axios.get('/api/customer-order-statuses/'));
+
+        const responses = await Promise.all(requests);
+        let idx = 0;
+        if (!cachedCustomers) {
+          this.customers = responses[idx].data;
+          setCachedJson('counterparty-options:customer', this.customers);
+          idx += 1;
+        }
+        if (!cachedStatuses) {
+          this.statuses = responses[idx].data;
+          setCachedJson('customer-order-statuses', this.statuses);
+        }
       } catch (e) {
         console.error(e);
         alert('Ошибка при загрузке справочников');
       }
     },
-    async fetchOrders() {
+    async fetchOrders({ useCache = false } = {}) {
+      const cacheKey = this.ordersCacheKey();
+      const cached = useCache ? getCachedJson(cacheKey) : null;
+      if (cached) {
+        this.applyOrdersResponse(cached);
+      }
+
+      this.isLoading = !cached;
       try {
-        this.orders = (await axios.get('/api/customer-order/')).data;
+        const res = await axios.get('/api/customer-order/', {
+          params: this.orderQueryParams()
+        });
+        setCachedJson(cacheKey, res.data);
+        this.applyOrdersResponse(res.data);
       } catch (e) {
         console.error(e);
-        alert('Не удалось загрузить заказы');
+        alert('Unable to load orders');
+      } finally {
+        this.isLoading = false;
       }
     },
 
@@ -179,10 +242,65 @@ export default {
     },
     resetFilters() {
       this.searchQuery = '';
-      this.filters = {customer: '', status: ''};
+      this.filters = {customerQuery: '', status: ''};
+      this.page = 1;
+      this.saveTableState();
+      this.fetchOrders();
     },
 
     /* --- переходы --- */
+    orderQueryParams() {
+      return {
+        page: this.page,
+        page_size: this.pageSize,
+        search: this.searchQuery || undefined,
+        customer_query: this.filters.customerQuery || undefined,
+        status: this.filters.status || undefined,
+      };
+    },
+    ordersCacheKey() {
+      return `customer-orders:${JSON.stringify(this.orderQueryParams())}`;
+    },
+    applyOrdersResponse(data) {
+      const page = paginatedResults(data);
+      this.orders = page.results;
+      this.totalCount = page.count;
+    },
+    saveTableState() {
+      setSavedState(TABLE_STATE_KEY, {
+        page: this.page,
+        searchQuery: this.searchQuery,
+        filters: this.filters,
+      });
+    },
+    restoreTableState() {
+      const state = getSavedState(TABLE_STATE_KEY, {
+        page: 1,
+        searchQuery: '',
+        filters: {customerQuery: '', status: ''},
+      });
+      this.page = state.page;
+      this.searchQuery = state.searchQuery;
+      this.filters = {
+        customerQuery: state.filters?.customerQuery || '',
+        status: state.filters?.status || '',
+      };
+    },
+    onFiltersChanged() {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = window.setTimeout(() => {
+        this.page = 1;
+        this.saveTableState();
+        this.fetchOrders();
+      }, 300);
+    },
+    changePage(page) {
+      if (page < 1 || page > this.totalPages || page === this.page) return;
+      this.page = page;
+      this.saveTableState();
+      this.fetchOrders({ useCache: true });
+    },
+
     openModal() {
       this.$router.push('/customer-orders/new');
     },
@@ -195,7 +313,9 @@ export default {
       if (!confirm('Удалить заказ?')) return;
       try {
         await axios.delete(`/api/customer-order/${id}/`);
+        clearCacheByPrefix('customer-orders:');
         this.orders = this.orders.filter(o => o.id !== id);
+        this.totalCount = Math.max(0, this.totalCount - 1);
       } catch (e) {
         console.error(e);
         alert('Ошибка при удалении');

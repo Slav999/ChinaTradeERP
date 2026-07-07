@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Product, ProductCategory, Unit, GlobalSettings
+
+from .models import CompanySettings, Product, ProductCategory, Unit
 
 
 @admin.register(Product)
@@ -9,11 +10,10 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ('category', 'unit', 'supplier')
 
 
-@admin.register(GlobalSettings)
-class GlobalSettingsAdmin(admin.ModelAdmin):
-    def has_add_permission(self, request):
-        # Запретить создание, если уже есть хотя бы одна запись
-        return not GlobalSettings.objects.exists()
+@admin.register(CompanySettings)
+class CompanySettingsAdmin(admin.ModelAdmin):
+    list_display = ('company', 'cny_to_local_rate', 'usd_to_local_rate', 'margin_pct', 'discount_pct')
+    search_fields = ('company__name',)
 
 
 admin.site.register(ProductCategory)

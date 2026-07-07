@@ -88,7 +88,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import axios from '../axios'
 
 export default {
   name: 'RegisterPage',
@@ -137,7 +137,7 @@ export default {
       // Backend call
       try {
         await axios.post(
-            'http://localhost:8000/api/auth/register/',
+            '/api/auth/register/',
             {
               company_name: this.form.company_name,
               username: this.form.username,

@@ -38,7 +38,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import axios from '../axios'
 
 export default {
   name: 'ResetPasswordPage',
@@ -77,7 +77,7 @@ export default {
 
 
       try {
-        await axios.post('http://localhost:8000/api/auth/reset-password/', this.form)
+        await axios.post('/api/auth/reset-password/', this.form)
         this.message = 'Password updated successfully.'
         setTimeout(() => {
           this.$router.push('/login')

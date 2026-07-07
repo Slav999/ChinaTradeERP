@@ -17,7 +17,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import axios from '../axios'
 
 export default {
   name: 'VerifyEmailPage',
@@ -40,7 +40,7 @@ export default {
       }
 
       try {
-        const response = await axios.post('http://localhost:8000/api/auth/verify-email/', {
+        await axios.post('/api/auth/verify-email/', {
           email,
           code: this.code
         })

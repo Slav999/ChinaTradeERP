@@ -1,14 +1,43 @@
 from django.urls import path
-from .views import RegisterView, LoginView, MeView, LogoutView, VerifyEmailView, ForgotPasswordView, ResetPasswordView, \
-    InviteUserView
-from rest_framework_simplejwt.views import TokenRefreshView
+
+from .views import (
+    AcceptInvitationView,
+    AccessRoleListView,
+    CookieTokenRefreshView,
+    CompanyMembershipListView,
+    DepartmentListView,
+    DismissEmployeeView,
+    EmployeeListView,
+    ForgotPasswordView,
+    InvitationListCreateView,
+    InvitationPreviewView,
+    InviteUserView,
+    LoginView,
+    LogoutView,
+    MeView,
+    RegisterView,
+    ResetPasswordView,
+    SessionView,
+    SwitchCompanyView,
+    VerifyEmailView,
+)
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
     path('invite/', InviteUserView.as_view(), name='invite_user'),
+    path('invitations/', InvitationListCreateView.as_view(), name='invitations'),
+    path('invitations/accept/', AcceptInvitationView.as_view(), name='accept_invitation'),
+    path('invitations/<str:token>/', InvitationPreviewView.as_view(), name='invitation_preview'),
+    path('departments/', DepartmentListView.as_view(), name='departments'),
+    path('access-roles/', AccessRoleListView.as_view(), name='access_roles'),
+    path('memberships/', CompanyMembershipListView.as_view(), name='company_memberships'),
+    path('employees/', EmployeeListView.as_view(), name='employees'),
+    path('employees/<int:pk>/dismiss/', DismissEmployeeView.as_view(), name='dismiss_employee'),
+    path('switch-company/', SwitchCompanyView.as_view(), name='switch_company'),
     path('login/', LoginView.as_view(), name='login'),
     path('me/', MeView.as_view(), name='me'),
-    path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('session/', SessionView.as_view(), name='session'),
+    path('refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('verify-email/', VerifyEmailView.as_view(), name='verify_email'),
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot-password'),

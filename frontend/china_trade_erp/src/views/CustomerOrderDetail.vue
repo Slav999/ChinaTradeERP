@@ -64,7 +64,7 @@
         <!-- AUDIT-BLOCK -->
         <div
           v-if="isEdit"
-          class="audit-info mb-3 p-3 bg-light rounded border"
+            class="audit-info mt-3 mb-3 p-3 bg-light rounded border"
           @click="openHistory"
           style="cursor:pointer"
         >
@@ -235,17 +235,16 @@
       class="modal fade"
       tabindex="-1"
       :class="{ show: showHistoryModal }"
-      v-show="showHistoryModal"
-      style="display: block;"
+      :style="showHistoryModal ? 'display: block;' : ''"
     >
-      <div class="modal-dialog modal-dialog-scrollable modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg">
         <transition name="modal-fade">
-          <div class="modal-content">
+          <div class="modal-content" v-if="showHistoryModal">
             <div class="modal-header">
               <h5 class="modal-title">Change History</h5>
               <button type="button" class="btn-close" @click="closeHistory"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body history-modal-body">
               <table v-if="historyLogs.length" class="table table-striped">
                 <thead>
                   <tr>
@@ -275,6 +274,7 @@
         </transition>
       </div>
     </div>
+    <div class="modal-backdrop fade history-backdrop" :class="{ show: showHistoryModal }"></div>
 
     <ProductAddEditModal
       :visible="showProductModal"
@@ -382,18 +382,20 @@ export default {
     async fetchAux() {
       try {
         const [
-          cpRes,
+          customerRes,
+          supplierRes,
           stRes,
           catRes,
           unitRes
         ] = await Promise.all([
-          axios.get('/api/counterparties/'),
+          axios.get('/api/counterparties/options/', { params: { role: 'customer' } }),
+          axios.get('/api/counterparties/options/', { params: { role: 'supplier' } }),
           axios.get('/api/customer-order-statuses/'),
           axios.get('/api/product-category/'),
           axios.get('/api/units/'),
         ]);
-        this.customers = cpRes.data;
-        this.suppliers = cpRes.data;
+        this.customers = customerRes.data;
+        this.suppliers = supplierRes.data;
         this.statuses = stRes.data;
         this.categories = catRes.data;
         this.units = unitRes.data;
@@ -544,7 +546,7 @@ export default {
       const { data } = await axios.get('/api/products/', {
         params: { search: this.positionSearch }
       });
-      this.productSuggestions = data;
+      this.productSuggestions = Array.isArray(data) ? data : (data.results || []);
     },
 
     async addPosition(product) {
@@ -686,6 +688,10 @@ export default {
 }
 .modal-fade-enter-from, .modal-fade-leave-to {
   opacity: 0; transform: translateY(-10px);
+}
+.history-modal-body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 .attachment-list { list-style: none; padding-left: 0; }
 .attachment-list li { margin-bottom: .25rem; }
