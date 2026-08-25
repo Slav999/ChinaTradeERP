@@ -5,8 +5,18 @@ from users.models import Company, CustomUser
 
 
 class CounterpartyStatus(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='counterparty_statuses',
+    )
+    name = models.CharField(max_length=100)
     color = models.CharField(max_length=7, default='#999999')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_counterparty_status_per_company'),
+        ]
 
     def __str__(self):
         return self.name
@@ -15,8 +25,6 @@ class CounterpartyStatus(models.Model):
 class Counterparty(BaseModel):
     company = models.ForeignKey(
         Company,
-        null=True,  # временно разрешаем NULL
-        blank = True,
         on_delete=models.CASCADE,
         related_name='counterparties'
     )
@@ -24,7 +32,7 @@ class Counterparty(BaseModel):
     type = models.CharField(max_length=20, choices=[('china', 'Chinese'), ('local', 'Local')])
     is_supplier = models.BooleanField(default=False)
     is_customer = models.BooleanField(default=False)
-    unique_code = models.CharField(max_length=50, unique=True, blank=True)
+    unique_code = models.CharField(max_length=50, blank=True)
     address = models.TextField(blank=True, null=True)
     qr_code_image = models.ImageField(upload_to='qr_codes/', blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True)
@@ -41,6 +49,11 @@ class Counterparty(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({self.get_type_display()})"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'unique_code'], name='unique_counterparty_code_per_company'),
+        ]
 
 
 class CounterpartyChangeLog(ChangeLog):

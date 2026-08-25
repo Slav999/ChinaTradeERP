@@ -38,13 +38,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
+    'django_countries',
     'users',
     'corsheaders',
     'supplier_orders',
     'customer_orders',
     'counterparties',
     'core',
-    'products'
+    'products',
+    'warehouse',
 ]
 
 MIDDLEWARE = [

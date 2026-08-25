@@ -1,5 +1,6 @@
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import viewsets, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from core.views import BaseAuditViewSet, ChangeLogHistoryMixin
@@ -19,6 +20,7 @@ from .serializers import (
     CustomerOrderAttachmentSerializer
 )
 from core.pagination import StandardResultsSetPagination
+from core.order_documents import build_customer_order_pdf
 from .services.create_supplier_orders import (
     SupplierOrderCreationError,
     build_customer_order_related_documents,
@@ -28,10 +30,10 @@ from .services.create_supplier_orders import (
 import io
 from django.conf import settings
 from django.core.mail import EmailMessage
-from reportlab.pdfgen import canvas
 from django.db.models import Q
 import pandas as pd
 from django.http import FileResponse
+from warehouse.services import sync_customer_order
 
 
 class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
@@ -43,7 +45,7 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     def get_queryset(self):
         user_company = self.request.user.company
         queryset = CustomerOrder.objects.filter(
-            customer__company=user_company
+            company=user_company
         ).select_related(
             'customer', 'status'
         )
@@ -124,24 +126,7 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
         order = self.get_object()
 
         # 1) Generate PDF in memory
-        buffer = io.BytesIO()
-        p = canvas.Canvas(buffer)
-        p.setFont("Helvetica", 14)
-        p.drawString(50, 800, f"Order #{order.order_number}")
-        y = 770
-        p.setFont("Helvetica", 12)
-        items = CustomerOrderItem.objects.filter(order=order)
-        for idx, item in enumerate(items, start=1):
-            line = f"{idx}. {item.product.name} — qty: {item.quantity}"
-            p.drawString(50, y, line)
-            y -= 20
-            if y < 50:
-                p.showPage()
-                y = 800
-        p.showPage()
-        p.save()
-        buffer.seek(0)
-        pdf_data = buffer.read()
+        pdf_data = build_customer_order_pdf(order)
 
         # 2) Get customer's email
         customer_email = getattr(order.customer, 'email', None)
@@ -159,6 +144,7 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
             body=body,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[customer_email],
+            reply_to=[order.company.work_email] if order.company.work_email else None,
         )
         email.attach(f"order_{order.id}.pdf", pdf_data, "application/pdf")
         email.send(fail_silently=False)
@@ -205,6 +191,20 @@ class CustomerOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
             return CustomerOrderListSerializer
         return super().get_serializer_class()
 
+    def perform_create(self, serializer):
+        order = serializer.save(
+            company=self.request.user.company,
+            created_by=self.request.user,
+            updated_by=self.request.user,
+        )
+        sync_customer_order(order, self.request.user)
+
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        order = serializer.save(updated_by=self.request.user)
+        self.log_changes(obj, order)
+        sync_customer_order(order, self.request.user)
+
 
 class CustomerOrderItemViewSet(viewsets.ModelViewSet):
     queryset = CustomerOrderItem.objects.all()
@@ -213,7 +213,7 @@ class CustomerOrderItemViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = self.queryset.filter(
-            order__customer__company=self.request.user.company
+            order__company=self.request.user.company
         ).select_related('order', 'product', 'product__unit')
 
         order_id = self.request.query_params.get('order')
@@ -221,8 +221,40 @@ class CustomerOrderItemViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(order_id=order_id)
         return queryset
 
+    def perform_create(self, serializer):
+        item = serializer.save()
+        sync_customer_order(item.order, self.request.user)
 
-class CustomerOrderStatusViewSet(viewsets.ReadOnlyModelViewSet):
+    def perform_update(self, serializer):
+        item = serializer.save()
+        sync_customer_order(item.order, self.request.user)
+
+    def perform_destroy(self, instance):
+        order = instance.order
+        instance.delete()
+        sync_customer_order(order, self.request.user)
+
+
+class CustomerOrderStatusViewSet(viewsets.ModelViewSet):
     queryset = CustomerOrderStatus.objects.all()
     serializer_class = CustomerOrderStatusSerializer
     permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if request.method not in ('GET', 'HEAD', 'OPTIONS') and not request.user.is_company_admin:
+            raise PermissionDenied('Only company admins can change statuses.')
+
+    def get_queryset(self):
+        return CustomerOrderStatus.objects.filter(company=self.request.user.company).order_by('id')
+
+    def perform_create(self, serializer):
+        serializer.save(company=self.request.user.company)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not request.user.is_company_admin:
+            return Response({'detail': 'Only company admins can delete statuses.'}, status=status.HTTP_403_FORBIDDEN)
+        if CustomerOrder.objects.filter(company=request.user.company, status=instance).exists():
+            return Response({'detail': 'Status is used by customer orders and cannot be deleted.'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)

@@ -17,6 +17,48 @@
           </div>
         </div>
 
+        <div class="mb-3 country-picker">
+          <label for="business_country" class="form-label">Country of business</label>
+          <input
+            v-model="countrySearch"
+            type="text"
+            class="form-control"
+            id="business_country"
+            :class="{ 'is-invalid': errors.business_country }"
+            placeholder="Start typing a country..."
+            autocomplete="off"
+            @focus="showCountrySuggestions = true"
+            @input="onCountrySearchInput"
+            @keydown.down.prevent="moveCountryHighlight(1)"
+            @keydown.up.prevent="moveCountryHighlight(-1)"
+            @keydown.enter.prevent="selectHighlightedCountry"
+            @keydown.esc="showCountrySuggestions = false"
+            @blur="hideCountrySuggestions"
+          >
+          <div
+            v-if="showCountrySuggestions && filteredCountries.length"
+            class="country-suggestions list-group shadow-sm"
+          >
+            <button
+              v-for="(country, index) in filteredCountries"
+              :key="country.code"
+              type="button"
+              class="list-group-item list-group-item-action"
+              :class="{ active: index === highlightedCountryIndex }"
+              @mousedown.prevent="selectCountry(country)"
+            >
+              <span>{{ country.name }}</span>
+              <span class="text-muted small ms-2">{{ country.code }}</span>
+            </button>
+          </div>
+          <div class="form-text">
+            We use this to set the default currency, tax rate, and exchange rates.
+          </div>
+          <div class="invalid-feedback" v-if="errors.business_country">
+            Country of business is required.
+          </div>
+        </div>
+
         <div class="mb-3">
           <label for="username" class="form-label">Username</label>
           <input
@@ -98,9 +140,14 @@ export default {
         company_name: '',
         username: '',
         email: '',
+        business_country: '',
         password: '',
         password2: ''
       },
+      countries: [],
+      countrySearch: '',
+      showCountrySuggestions: false,
+      highlightedCountryIndex: 0,
       errors: {},
       serverError: '',
       showPassword: false
@@ -109,15 +156,63 @@ export default {
   computed: {
     passwordTooltip() {
       return 'Password must be at least 8 characters,\ninclude uppercase letter and number.'
+    },
+    filteredCountries() {
+      const query = this.countrySearch.trim().toLowerCase()
+      return query
+        ? this.countries.filter(country =>
+            country.name.toLowerCase().includes(query) ||
+            country.code.toLowerCase().includes(query)
+          )
+        : this.countries
     }
   },
+  created() {
+    this.fetchCountries()
+  },
   methods: {
+    async fetchCountries() {
+      try {
+        const { data } = await axios.get('/api/auth/business-countries/')
+        this.countries = data
+      } catch {
+        this.countries = []
+      }
+    },
+    onCountrySearchInput() {
+      this.form.business_country = ''
+      this.highlightedCountryIndex = 0
+      this.showCountrySuggestions = true
+    },
+    selectCountry(country) {
+      this.form.business_country = country.code
+      this.countrySearch = country.name
+      this.showCountrySuggestions = false
+      this.errors.business_country = false
+    },
+    moveCountryHighlight(direction) {
+      if (!this.filteredCountries.length) return
+      const max = this.filteredCountries.length - 1
+      this.highlightedCountryIndex += direction
+      if (this.highlightedCountryIndex < 0) this.highlightedCountryIndex = max
+      if (this.highlightedCountryIndex > max) this.highlightedCountryIndex = 0
+    },
+    selectHighlightedCountry() {
+      const country = this.filteredCountries[this.highlightedCountryIndex]
+      if (country) this.selectCountry(country)
+    },
+    hideCountrySuggestions() {
+      setTimeout(() => {
+        this.showCountrySuggestions = false
+      }, 120)
+    },
     async register() {
       this.errors = {}
       this.serverError = ''
 
       // Frontend validation
       if (!this.form.company_name) this.errors.company_name = true
+      if (!this.form.business_country) this.errors.business_country = true
       if (!this.form.username) this.errors.username = true
       if (!this.form.email || !this.form.email.includes('@')) this.errors.email = true
 
@@ -140,6 +235,7 @@ export default {
             '/api/auth/register/',
             {
               company_name: this.form.company_name,
+              business_country: this.form.business_country,
               username: this.form.username,
               email: this.form.email,
               password: this.form.password,
@@ -162,3 +258,25 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.country-picker {
+  position: relative;
+}
+
+.country-suggestions {
+  left: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  top: 74px;
+  z-index: 1050;
+}
+
+.country-suggestions .list-group-item {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+</style>

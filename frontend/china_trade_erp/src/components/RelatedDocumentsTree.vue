@@ -15,7 +15,10 @@
           <div v-if="root.supplier_name" class="small text-muted">{{ root.supplier_name }}</div>
           <div>№{{ root.order_number }}</div>
           <div class="small text-muted">{{ formatDate(root.created_at) }}</div>
-          <div class="fw-semibold">{{ root.total_amount || '0.00' }} rub</div>
+          <div class="fw-semibold">{{ formatPrimaryAmount(root) }}</div>
+          <div v-if="root.doc_type === 'supplier_order'" class="small text-muted">
+            ≈ {{ formatCompanyAmount(root) }}
+          </div>
         </div>
         <div class="doc-card__status" :style="{ backgroundColor: statusColor(root) }">
           {{ root.status?.name || '-' }}
@@ -42,7 +45,10 @@
           <div v-if="child.supplier_name" class="small text-muted">{{ child.supplier_name }}</div>
           <div>№{{ child.order_number }}</div>
           <div class="small text-muted">{{ formatDate(child.created_at) }}</div>
-          <div class="fw-semibold">{{ child.total_amount || '0.00' }} rub</div>
+          <div class="fw-semibold">{{ formatPrimaryAmount(child) }}</div>
+          <div v-if="child.doc_type === 'supplier_order'" class="small text-muted">
+            ≈ {{ formatCompanyAmount(child) }}
+          </div>
         </div>
         <div class="doc-card__status" :style="{ backgroundColor: statusColor(child) }">
           {{ child.status?.name || '-' }}
@@ -70,6 +76,16 @@ export default {
     },
     statusColor(doc) {
       return doc.status?.color || '#6c757d';
+    },
+    formatPrimaryAmount(doc) {
+      if (doc.doc_type === 'supplier_order') {
+        return `${doc.amount_original || doc.total_amount || '0.00'} ${doc.currency_original_symbol || doc.currency_original || 'CNY'}`;
+      }
+      return this.formatCompanyAmount(doc);
+    },
+    formatCompanyAmount(doc) {
+      const currency = doc.company_currency_symbol || doc.company_currency_code || '';
+      return `${doc.amount_company_currency || doc.total_amount || '0.00'} ${currency}`.trim();
     },
     formatDate(value) {
       if (!value) return '-';

@@ -1,35 +1,55 @@
 from django.db import models
+from django.core.exceptions import ObjectDoesNotExist
 from core.models import BaseModel, ChangeLog
 from counterparties.models import Counterparty
 from products.models import Product
 from django.db.models import Max
+from users.models import Company
+from decimal import Decimal
 
 
-def get_default_shipping_address():
+def get_default_shipping_address(company=None):
     """
     Возвращает дефолтный адрес из единственной записи ShippingAddress (если есть).
     """
-    addr = ShippingAddress.objects.first()
+    if company:
+        addr = ShippingAddress.objects.filter(company=company).first()
+    else:
+        addr = ShippingAddress.objects.first()
     return addr.default_shipping_address if addr else ''
 
 
 class SupplierOrderStatus(models.Model):
     """Статусы заказа поставщику (админ может добавлять/редактировать)"""
-    name = models.CharField("Название", max_length=100, unique=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='supplier_order_statuses',
+    )
+    name = models.CharField("Name", max_length=100)
     color = models.CharField("Цвет (hex)", max_length=7, default="#007bff")
 
     class Meta:
         verbose_name = "Статус заказа поставщику"
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_supplier_order_status_per_company'),
+        ]
         verbose_name_plural = "Статусы заказа поставщику"
 
     def __str__(self):
         return self.name
 
 
+
 class ShippingAddress(models.Model):
-    """Настройки: дефолтный адрес отгрузки"""
+    """Default supplier shipping address settings."""
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='supplier_shipping_address',
+    )
     default_shipping_address = models.TextField(
-        "Адрес отгрузки по умолчанию", blank=True
+        "Default Shipping Address", blank=True
     )
 
     def __str__(self):
@@ -37,9 +57,14 @@ class ShippingAddress(models.Model):
 
 
 class SupplierOrder(BaseModel):
-    """Заказ поставщику"""
+    """Supplier order"""
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='supplier_orders',
+    )
     order_number = models.CharField(
-        "Номер заказа", max_length=50, unique=True
+        "Order Number", max_length=50
     )
     created_at = models.DateTimeField(
         "Дата создания", auto_now_add=True
@@ -77,7 +102,6 @@ class SupplierOrder(BaseModel):
     )
     shipping_address = models.TextField(
         "Адрес отгрузки",
-        default=get_default_shipping_address,
         blank=True,
     )
     shipping_code = models.CharField(
@@ -92,12 +116,36 @@ class SupplierOrder(BaseModel):
     supplier_comment = models.TextField(
         "Комментарий для поставщика", blank=True
     )
+    internal_comment = models.TextField(
+        "Внутренний комментарий", blank=True
+    )
     amount_cny = models.DecimalField(
         "Сумма в юанях",
         max_digits=12,
         decimal_places=2,
         blank=True,
         null=True,
+    )
+    cny_to_local_rate = models.DecimalField(
+        "CNY to local rate at order creation",
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        editable=False,
+    )
+    company_currency_code = models.CharField(
+        "Company currency at order creation",
+        max_length=3,
+        blank=True,
+        default='',
+        editable=False,
+    )
+    company_currency_symbol = models.CharField(
+        "Company currency symbol at order creation",
+        max_length=12,
+        blank=True,
+        default='',
+        editable=False,
     )
     track_number = models.CharField(
         "Трек-номер", max_length=200, blank=True
@@ -128,18 +176,36 @@ class SupplierOrder(BaseModel):
         indexes = [
             models.Index(fields=['customer_order', 'supplier']),
         ]
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'order_number'], name='unique_supplier_order_number_per_company'),
+        ]
 
     def save(self, *args, **kwargs):
+        if not self.company_id:
+            if self.supplier_id:
+                self.company = self.supplier.company
+            elif self.customer_id:
+                self.company = self.customer.company
         # Подставляем дефолтный адрес если не указан
         if not self.shipping_address:
-            self.shipping_address = get_default_shipping_address()
+            self.shipping_address = get_default_shipping_address(self.company if self.company_id else None)
         if not self.order_number:
             last_num = (
                     SupplierOrder.objects
+                    .filter(company=self.company)
                     .aggregate(Max('id'))
                     .get('id__max') or 0
             )
             self.order_number = str(last_num + 1)
+        if self._state.adding and self.company_id:
+            try:
+                self.cny_to_local_rate = self.company.product_settings.cny_to_local_rate
+            except ObjectDoesNotExist:
+                self.cny_to_local_rate = Decimal('1.00')
+            self.company_currency_code = self.company.base_currency_code or ''
+            self.company_currency_symbol = (
+                self.company.base_currency_symbol or self.company_currency_code
+            )
         # Подставляем QR из поставщика если не указан
         if self.supplier and not self.payment_details_qr:
             self.payment_details_qr = self.supplier.qr_code_image
@@ -169,12 +235,24 @@ class SupplierOrderItem(models.Model):
         decimal_places=2,
         default=0,
     )
+    unit_price_cny = models.DecimalField(
+        "Purchase price per unit at order creation",
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        editable=False,
+    )
     unit = models.CharField(
         "Единица измерения", max_length=20, blank=True
     )
     comment = models.TextField(
         "Комментарий к позиции", blank=True
     )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.product_id:
+            self.unit_price_cny = self.product.purchase_price or Decimal('0.00')
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.product.name} — {self.quantity} {self.unit}"

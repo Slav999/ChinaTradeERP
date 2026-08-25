@@ -133,12 +133,12 @@
 
     <!-- QR Preview Modal -->
     <div
-        class="modal fade"
+        class="modal fade qr-modal"
         :class="{ show: !!qrModalUrl }"
         :style="qrModalUrl ? 'display: block;' : ''"
         tabindex="-1"
     >
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered qr-dialog">
         <transition name="modal-fade">
           <div class="modal-content" v-if="showQrContent && qrModalUrl">
             <div class="modal-header">
@@ -146,13 +146,15 @@
               <button type="button" class="btn-close" @click="closeQr"></button>
             </div>
             <div class="modal-body text-center">
-              <img :src="qrModalUrl" class="img-fluid" style="max-height: 80vh;" alt="QR code"/>
+              <div class="qr-modal-frame">
+                <img :src="qrModalUrl" class="qr-modal-image" alt="QR code"/>
+              </div>
             </div>
           </div>
         </transition>
       </div>
     </div>
-    <div class="modal-backdrop fade" :class="{ show: !!qrModalUrl }"></div>
+    <div class="modal-backdrop fade qr-backdrop" :class="{ show: !!qrModalUrl }"></div>
   </div>
 </template>
 
@@ -403,5 +405,43 @@ export default {
 .modal-fade-leave-from {
   opacity: 1;
   transform: translateY(0);
+}
+
+.qr-modal {
+  z-index: 1090;
+}
+
+.qr-backdrop {
+  z-index: 1085;
+}
+
+.qr-dialog {
+  width: min(440px, calc(100vw - 1rem));
+  max-width: min(440px, calc(100vw - 1rem));
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.qr-dialog .modal-body {
+  padding: 1rem;
+}
+
+.qr-modal-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(360px, calc(100vw - 4rem));
+  height: min(360px, calc(100vw - 4rem));
+  margin: 0 auto;
+  padding: 14px;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qr-modal-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 </style>

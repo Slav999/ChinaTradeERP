@@ -14,6 +14,9 @@
             <button type="button" class="btn-close" @click="$emit('close')"></button>
           </div>
           <div class="modal-body">
+            <div v-if="readOnly" class="alert alert-secondary py-2 mb-3">
+              Archived product is read-only. Restore it before editing.
+            </div>
             <div v-if="isEdit" class="audit-info mb-3 p-3 bg-light rounded border" style="cursor: pointer;"
                  @click="$emit('open-history')">
               <div class="row">
@@ -34,48 +37,107 @@
               <div class="row gy-3">
                 <div class="col-md-6">
                   <label class="form-label">Name</label>
-                  <input v-model="form.name" type="text" class="form-control" required/>
+                  <input v-model="form.name" type="text" class="form-control" :disabled="readOnly" required/>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">SKU</label>
-                  <input v-model="form.sku" type="text" class="form-control" required/>
+                  <input v-model="form.sku" type="text" class="form-control" :disabled="readOnly" required/>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Category</label>
-                  <select v-model="form.category_id" class="form-select">
-                    <option disabled value="">Select category...</option>
-                    <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-                  </select>
+                  <div class="input-group">
+                    <select v-model="form.category_id" class="form-select" :disabled="readOnly">
+                      <option disabled value="">Select category...</option>
+                      <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                    </select>
+                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="toggleQuickAdd('category')">+</button>
+                  </div>
+                  <div v-if="quickAdd.category" class="quick-add-row mt-2">
+                    <input
+                        v-model.trim="quickForms.category.name"
+                        class="form-control form-control-sm"
+                        placeholder="New category name"
+                        @keydown.enter.prevent="createCategory"
+                    />
+                    <button type="button" class="btn btn-sm btn-primary" :disabled="isCreatingReference" @click="createCategory">
+                      Add
+                    </button>
+                  </div>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Unit</label>
-                  <select v-model="form.unit_id" class="form-select">
-                    <option disabled value="">Select unit...</option>
-                    <option v-for="u in units" :key="u.id" :value="u.id">{{ u.name }}</option>
-                  </select>
+                  <div class="input-group">
+                    <select v-model="form.unit_id" class="form-select" :disabled="readOnly">
+                      <option disabled value="">Select unit...</option>
+                      <option v-for="u in units" :key="u.id" :value="u.id">{{ u.name }}</option>
+                    </select>
+                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="toggleQuickAdd('unit')">+</button>
+                  </div>
+                  <div v-if="quickAdd.unit" class="quick-add-row mt-2">
+                    <input
+                        v-model.trim="quickForms.unit.name"
+                        class="form-control form-control-sm"
+                        placeholder="New unit name"
+                        @keydown.enter.prevent="createUnit"
+                    />
+                    <button type="button" class="btn btn-sm btn-primary" :disabled="isCreatingReference" @click="createUnit">
+                      Add
+                    </button>
+                  </div>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Supplier</label>
-                  <select v-model="form.supplier_id" class="form-select" required>
-                    <option disabled value="">Select supplier...</option>
-                    <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
-                  </select>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Quantity</label>
-                  <input v-model.number="form.quantity" type="number" min="0" class="form-control"/>
+                  <div class="input-group">
+                    <select v-model="form.supplier_id" class="form-select" :disabled="readOnly" required>
+                      <option disabled value="">Select supplier...</option>
+                      <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
+                    </select>
+                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="openSupplierModal">+</button>
+                  </div>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Purchase Price</label>
-                  <input v-model.number="form.purchase_price" type="number" step="0.01" class="form-control"/>
+                  <div class="input-group">
+                    <span class="input-group-text">{{ purchaseCurrencySymbol }}</span>
+                    <input v-model.number="form.purchase_price" type="number" step="0.01" class="form-control" :disabled="readOnly"/>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Weight per unit, kg</label>
+                  <input
+                      v-model.number="form.weight_kg"
+                      type="number"
+                      step="0.001"
+                      min="0"
+                      class="form-control"
+                      :disabled="readOnly"
+                  />
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label d-block">Warehouse</label>
+                  <div class="form-check form-switch product-switch">
+                    <input
+                        id="product-is-stock-item"
+                        v-model="form.is_stock_item"
+                        class="form-check-input"
+                        type="checkbox"
+                        :disabled="readOnly"
+                    />
+                    <label class="form-check-label" for="product-is-stock-item">
+                      Warehouse item
+                    </label>
+                  </div>
                 </div>
                 <div class="col-md-6">
                   <label class="form-label">Sale Price</label>
-                  <input v-model.number="form.sale_price" type="number" step="0.01" class="form-control"/>
+                  <div class="input-group sale-price-group">
+                    <span class="input-group-text">{{ saleCurrencySymbol || '-' }}</span>
+                    <input v-model.number="form.sale_price" type="number" step="0.01" class="form-control sale-price-input" readonly/>
+                  </div>
                 </div>
                 <div class="col-12">
                   <label class="form-label">Image</label>
-                  <input type="file" class="form-control" @change="handleImageUpload"/>
+                  <input type="file" class="form-control" :disabled="readOnly" @change="handleImageUpload"/>
                   <div v-if="imagePreview" class="mt-2 text-center">
                     <img :src="imagePreview" class="img-fluid" style="max-height: 200px;"/>
                   </div>
@@ -85,17 +147,122 @@
           </div>
           <div class="modal-footer justify-content-end">
             <button class="btn btn-secondary" @click="$emit('close')">Cancel</button>
-            <button v-if="isEdit" class="btn btn-warning me-auto" @click="$emit('open-calc')">Calculate Price</button>
-            <button class="btn btn-primary" @click="save">{{ isEdit ? 'Save' : 'Create' }}</button>
+            <button v-if="!readOnly" class="btn btn-primary" @click="save">{{ isEdit ? 'Save' : 'Create' }}</button>
           </div>
         </div>
       </transition>
     </div>
   </div>
+  <div v-if="visible" class="modal-backdrop product-modal-backdrop"></div>
+
+  <div
+      class="modal fade supplier-modal"
+      :class="{ show: supplierModalVisible }"
+      :style="supplierModalVisible ? 'display: block;' : ''"
+      tabindex="-1"
+  >
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <transition name="modal-fade">
+        <div class="modal-content" v-if="supplierModalVisible">
+          <div class="modal-header">
+            <h5 class="modal-title">Add Counterparty</h5>
+            <button type="button" class="btn-close" @click="closeSupplierModal"></button>
+          </div>
+          <div class="modal-body">
+            <form @submit.prevent="createSupplier">
+              <div class="row gy-3">
+                <div class="col-md-6">
+                  <label class="form-label">Name</label>
+                  <input v-model.trim="supplierForm.name" type="text" class="form-control" required/>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Region</label>
+                  <select v-model="supplierForm.type" class="form-select">
+                    <option value="china">Chinese</option>
+                    <option value="local">Local</option>
+                  </select>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Roles</label>
+                  <div class="d-flex flex-wrap gap-3">
+                    <div class="form-check">
+                      <input id="quickSupplierIsSupplier" v-model="supplierForm.is_supplier" class="form-check-input" type="checkbox"/>
+                      <label class="form-check-label" for="quickSupplierIsSupplier">Supplier</label>
+                    </div>
+                    <div class="form-check">
+                      <input id="quickSupplierIsCustomer" v-model="supplierForm.is_customer" class="form-check-input" type="checkbox"/>
+                      <label class="form-check-label" for="quickSupplierIsCustomer">Customer</label>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Unique Code</label>
+                  <input v-model.trim="supplierForm.unique_code" class="form-control"/>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Status</label>
+                  <select v-model="supplierForm.status_id" class="form-select">
+                    <option value="">No status</option>
+                    <option v-for="status in counterpartyStatuses" :key="status.id" :value="status.id">
+                      {{ status.name }}
+                    </option>
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Phone</label>
+                  <input v-model.trim="supplierForm.phone" class="form-control"/>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">Email</label>
+                  <input v-model.trim="supplierForm.email" type="email" class="form-control"/>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Address</label>
+                  <input v-model.trim="supplierForm.address" class="form-control"/>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Source</label>
+                  <input v-model.trim="supplierForm.source" class="form-control"/>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">QR Code Image</label>
+                  <input type="file" class="form-control" accept="image/*" @change="handleSupplierQrUpload"/>
+                  <div v-if="supplierQrPreview" class="supplier-qr-preview-box mt-2">
+                    <img :src="supplierQrPreview" class="supplier-qr-preview" alt="QR preview"/>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" @click="closeSupplierModal">Cancel</button>
+            <button class="btn btn-primary" :disabled="isCreatingReference" @click="createSupplier">
+              {{ isCreatingReference ? 'Creating...' : 'Create' }}
+            </button>
+          </div>
+        </div>
+      </transition>
+    </div>
+  </div>
+  <div v-if="supplierModalVisible" class="modal-backdrop supplier-modal-backdrop"></div>
 </template>
 
 <script>
 import axios from '../axios';
+
+const emptySupplierForm = () => ({
+  name: '',
+  type: 'china',
+  is_supplier: true,
+  is_customer: false,
+  unique_code: '',
+  status_id: '',
+  phone: '',
+  email: '',
+  address: '',
+  source: '',
+  qr_code_image: null,
+});
 
 export default {
   name: 'ProductAddEditModal',
@@ -105,19 +272,122 @@ export default {
     categories: Array,
     units: Array,
     suppliers: Array,
+    purchaseCurrencySymbol: {type: String, default: '¥'},
+    saleCurrencySymbol: {type: String, default: ''},
+    readOnly: {type: Boolean, default: false},
   },
   data() {
     return {
       form: this.initialProduct ? this.normalizeProduct(this.initialProduct) : this.emptyForm(),
       imagePreview: this.initialProduct?.image || null,
+      isCreatingReference: false,
+      quickAdd: {
+        category: false,
+        unit: false,
+      },
+      quickForms: {
+        category: { name: '' },
+        unit: { name: '' },
+      },
+      supplierModalVisible: false,
+      supplierForm: emptySupplierForm(),
+      supplierQrPreview: null,
+      counterpartyStatuses: [],
     };
   },
   methods: {
+    toggleQuickAdd(type) {
+      this.quickAdd[type] = !this.quickAdd[type];
+    },
+    async createCategory() {
+      const name = this.quickForms.category.name.trim();
+      if (!name) return;
+      const item = await this.createReference('/api/product-category/', {name}, 'category');
+      if (item) {
+        this.form.category_id = item.id;
+        this.quickForms.category.name = '';
+        this.quickAdd.category = false;
+      }
+    },
+    async createUnit() {
+      const name = this.quickForms.unit.name.trim();
+      if (!name) return;
+      const item = await this.createReference('/api/units/', {name}, 'unit');
+      if (item) {
+        this.form.unit_id = item.id;
+        this.quickForms.unit.name = '';
+        this.quickAdd.unit = false;
+      }
+    },
+    emptySupplierForm() {
+      return emptySupplierForm();
+    },
+    async openSupplierModal() {
+      this.supplierForm = this.emptySupplierForm();
+      this.supplierQrPreview = null;
+      this.supplierModalVisible = true;
+      if (!this.counterpartyStatuses.length) {
+        try {
+          const {data} = await axios.get('/api/counterparty-statuses/');
+          this.counterpartyStatuses = Array.isArray(data) ? data : data.results || [];
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    },
+    closeSupplierModal() {
+      this.supplierModalVisible = false;
+    },
+    handleSupplierQrUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      this.supplierForm.qr_code_image = file;
+      this.supplierQrPreview = URL.createObjectURL(file);
+    },
+    async createSupplier() {
+      const name = this.supplierForm.name.trim();
+      if (!name) {
+        alert('Please enter counterparty name');
+        return;
+      }
+      if (!this.supplierForm.is_supplier && !this.supplierForm.is_customer) {
+        alert('Select at least one role: supplier or customer.');
+        return;
+      }
+      const payload = new FormData();
+      Object.entries(this.supplierForm).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === '') return;
+        payload.append(key, value);
+      });
+      const item = await this.createReference('/api/counterparties/', payload, 'supplier', {
+        headers: {'Content-Type': 'multipart/form-data'},
+      });
+      if (item) {
+        this.form.supplier_id = item.id;
+        this.closeSupplierModal();
+      }
+    },
+    async createReference(url, payload, type, config = undefined) {
+      this.isCreatingReference = true;
+      try {
+        const {data} = await axios.post(url, payload, config);
+        this.$emit('reference-created', {type, item: data});
+        return data;
+      } catch (error) {
+        alert(this.formatApiError(error));
+        return null;
+      } finally {
+        this.isCreatingReference = false;
+      }
+    },
     emptyForm() {
       return {
         name: '', sku: '', category_id: null, unit_id: null,
-        supplier_id: null, quantity: 0,
+        supplier_id: null,
         purchase_price: 0, sale_price: 0,
+        is_stock_item: false,
+        units_per_package: 1, weight_kg: 0,
+        length_m: 0, width_m: 0, height_m: 0,
         image: null,
         created_at: null, created_by: null,
         updated_at: null, updated_by: null,
@@ -146,6 +416,11 @@ export default {
         alert('Please select a supplier');
         return false;
       }
+      if (!this.form.weight_kg || Number(this.form.weight_kg) <= 0) {
+        return confirm(
+          'Weight per unit is empty. The product will be saved, but sale price will not be calculated. Continue?'
+        );
+      }
       return true;
     },
     formatApiError(error) {
@@ -173,7 +448,12 @@ export default {
       if (!this.validateForm()) return;
       const fd = new FormData();
       Object.entries(this.form).forEach(([k, v]) => {
-        if (['id', 'category', 'unit', 'supplier', 'created_at', 'created_by', 'updated_at', 'updated_by'].includes(k)) return;
+        if ([
+          'id', 'category', 'unit', 'supplier',
+          'is_archived', 'archived_at', 'archived_by',
+          'created_at', 'created_by', 'updated_at', 'updated_by',
+        ].includes(k)) return;
+        if (k === 'sale_price') return;
         if (v !== null && v !== undefined) fd.append(k, v);
       });
       try {
@@ -184,6 +464,8 @@ export default {
         } else {
           res = await axios.post('/api/products/', fd, cfg);
         }
+        this.form = this.normalizeProduct(res.data);
+        this.imagePreview = res.data.image || this.imagePreview;
         this.$emit('saved', res.data);
       } catch (e) {
         console.error(e);
@@ -207,8 +489,13 @@ export default {
     }
   },
   watch: {
+    visible(value) {
+      if (!value) return;
+      this.form = this.initialProduct ? this.normalizeProduct(this.initialProduct) : this.emptyForm();
+      this.imagePreview = this.initialProduct?.image || null;
+      this.supplierModalVisible = false;
+    },
     initialProduct(prod) {
-      // reset form when prop changes
       this.form = prod ? this.normalizeProduct(prod) : this.emptyForm();
       this.imagePreview = prod?.image || null;
     }
@@ -217,11 +504,79 @@ export default {
 </script>
 
 <style scoped>
-.modal-backdrop {
-  display: none;
+.product-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  background-color: #000;
+  opacity: 0.5;
 }
-
-.modal-backdrop.show {
-  display: block;
+.supplier-modal {
+  z-index: 1070;
+}
+.supplier-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1065;
+  background-color: #000;
+  opacity: 0.35;
+}
+.supplier-qr-preview-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 180px;
+  height: 180px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 10px;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+  background: #fff;
+}
+.supplier-qr-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.quick-add-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.quick-add-row .form-control,
+.quick-add-row .form-select {
+  min-width: 0;
+}
+.quick-add-type {
+  max-width: 110px;
+}
+.quick-add-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.sale-price-group .input-group-text,
+.sale-price-input {
+  background-color: #fff8e1;
+  border-color: #f1d48a;
+  color: #2f3f50;
+  cursor: default;
+}
+.sale-price-input:focus {
+  background-color: #fff8e1;
+  border-color: #f1d48a;
+  box-shadow: 0 0 0 0.2rem rgba(241, 196, 93, 0.18);
+}
+.product-switch {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding-left: 2.5rem;
 }
 </style>

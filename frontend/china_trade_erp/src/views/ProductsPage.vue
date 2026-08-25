@@ -1,10 +1,16 @@
 <template>
   <div class="container mt-4">
+    <transition name="save-toast">
+      <div v-if="toastMessage" class="save-toast">
+        {{ toastMessage }}
+      </div>
+    </transition>
+
     <h1 class="mb-4">Products</h1>
 
     <!-- Search & Filters -->
     <div class="row mb-3 g-2">
-      <div class="col-md-4">
+      <div class="col-md-3">
         <input
             v-model.trim="searchQuery"
             @input="onSearchInput"
@@ -13,7 +19,7 @@
             placeholder="Search by name or SKU..."
         />
       </div>
-      <div class="col-md-3">
+      <div class="col-md-2">
         <select v-model="filters.category" class="form-select" @change="onSearchInput">
           <option disabled selected hidden value="">Select category...</option>
           <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
@@ -26,6 +32,13 @@
             :options="suppliers"
             placeholder="Filter by supplier..."
         />
+      </div>
+      <div class="col-md-2">
+        <select v-model="filters.archiveStatus" class="form-select" @change="onFiltersChanged">
+          <option value="active">Active</option>
+          <option value="archived">Archived</option>
+          <option value="all">All</option>
+        </select>
       </div>
       <div class="col-md-2 d-flex align-items-end">
         <button class="btn btn-secondary w-100" @click="resetFilters">Reset</button>
@@ -42,14 +55,13 @@
       <table class="table table-hover table-bordered align-middle">
         <thead class="table-light">
         <tr>
-          <th>Name</th>
+          <th class="product-name-col">Name</th>
           <th>SKU</th>
           <th class="d-none d-md-table-cell">Category</th>
           <th class="d-none d-md-table-cell">Unit</th>
           <th class="d-none d-md-table-cell">Supplier</th>
-          <th>Quantity</th>
           <th>Purchase / Sale Price</th>
-          <th>Actions</th>
+          <th class="actions-col">Actions</th>
         </tr>
         </thead>
         <tbody>
@@ -57,23 +69,50 @@
             v-for="p in products"
             :key="p.id"
             @click="editProduct(p)"
+            :class="{ 'archived-product-row': p.is_archived }"
             style="cursor: pointer;"
         >
-          <td>{{ p.name }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <span>{{ p.name }}</span>
+              <span v-if="p.is_archived" class="badge rounded-pill text-bg-secondary">Archived</span>
+            </div>
+            <div v-if="p.is_archived" class="small text-muted mt-1">
+              Archived {{ formatDate(p.archived_at) }}<span v-if="p.archived_by"> by {{ p.archived_by }}</span>
+            </div>
+          </td>
           <td>{{ p.sku }}</td>
           <td class="d-none d-md-table-cell">{{ p.category?.name || '—' }}</td>
           <td class="d-none d-md-table-cell">{{ p.unit?.name || '—' }}</td>
           <td class="d-none d-md-table-cell">{{ p.supplier?.name || '—' }}</td>
-          <td>{{ p.quantity }}</td>
-          <td>{{ p.purchase_price }} / {{ p.sale_price }}</td>
-          <td @click.stop>
+          <td>{{ formatMoney(p.purchase_price, '¥') }} / {{ formatMoney(p.sale_price, companyCurrencySymbol) }}</td>
+          <td class="actions-cell" @click.stop>
             <button
                 v-if="p.image"
-                class="btn btn-sm btn-secondary me-1"
+                class="btn btn-sm btn-secondary"
                 @click.stop="showImage(p.image)"
             >Фото
             </button>
             <button
+                v-if="p.is_archived"
+                class="btn btn-sm btn-outline-primary"
+                @click.stop="restoreProduct(p.id)"
+            >Restore
+            </button>
+            <button
+                v-if="p.is_archived && isCompanyAdmin"
+                class="btn btn-sm btn-outline-danger"
+                @click.stop="permanentlyDeleteProduct(p.id)"
+            >Delete permanently
+            </button>
+            <button
+                v-if="!p.is_archived"
+                class="btn btn-sm btn-outline-secondary"
+                @click.stop="archiveProduct(p.id)"
+            >Archive
+            </button>
+            <button
+                v-if="!p.is_archived && !p.has_history"
                 class="btn btn-sm btn-danger"
                 @click.stop="deleteProduct(p.id)"
             >Delete
@@ -81,10 +120,10 @@
           </td>
         </tr>
         <tr v-if="isLoading">
-          <td colspan="8" class="text-center text-muted">Loading...</td>
+          <td colspan="7" class="text-center text-muted">Loading...</td>
         </tr>
         <tr v-else-if="!products.length">
-          <td colspan="8" class="text-center text-muted">No products found.</td>
+          <td colspan="7" class="text-center text-muted">No products found.</td>
         </tr>
         </tbody>
       </table>
@@ -107,173 +146,20 @@
       </div>
     </div>
 
-    <!-- Add/Edit Modal -->
-    <div
-        class="modal fade edit-modal"
-        :class="{ show: showModal }"
-        :style="showModal ? 'display: block;' : ''"
-        tabindex="-1"
-    >
-      <div class="modal-dialog modal-dialog-centered modal-lg">
-        <transition name="modal-fade">
-          <div class="modal-content" v-if="showEditContent">
-            <div class="modal-header">
-              <h5 class="modal-title">{{ isEdit ? 'Edit' : 'Add' }} Product</h5>
-              <button type="button" class="btn-close" @click="closeModal"></button>
-            </div>
-            <div class="modal-body">
-              <!-- Audit Info -->
-              <div
-                  v-if="isEdit"
-                  class="audit-info mt-3 mb-3 p-3 bg-light rounded border"
-                  @click="openHistory"
-                  style="cursor: pointer;"
-              >
-                <div class="row">
-                  <div class="col text-muted small">
-                    <strong>Created At:</strong> {{ formatDate(productForm.created_at) }}
-                  </div>
-                  <div class="col text-muted small">
-                    <strong>Updated At:</strong> {{ formatDate(productForm.updated_at) }}
-                  </div>
-                </div>
-                <div class="row mt-2">
-                  <div class="col text-muted small">
-                    <strong>Created By:</strong> {{ productForm.created_by || '—' }}
-                  </div>
-                  <div class="col text-muted small">
-                    <strong>Updated By:</strong> {{ productForm.updated_by || '—' }}
-                  </div>
-                </div>
-              </div>
-
-              <form @submit.prevent="saveProduct">
-                <div class="row gy-3">
-                  <div class="col-md-6">
-                    <label class="form-label">Name</label>
-                    <input
-                        v-model="productForm.name"
-                        type="text"
-                        class="form-control"
-                        required
-                    />
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">SKU</label>
-                    <input
-                        v-model="productForm.sku"
-                        type="text"
-                        class="form-control"
-                        required
-                    />
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Category</label>
-                    <select v-model="productForm.category_id" class="form-select">
-                      <option disabled value="">Select category...</option>
-                      <option
-                          v-for="c in categories"
-                          :key="c.id"
-                          :value="c.id"
-                      >{{ c.name }}
-                      </option>
-                    </select>
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Unit</label>
-                    <select v-model="productForm.unit_id" class="form-select">
-                      <option disabled value="">Select unit...</option>
-                      <option
-                          v-for="u in units"
-                          :key="u.id"
-                          :value="u.id"
-                      >{{ u.name }}
-                      </option>
-                    </select>
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Supplier</label>
-                    <select
-                        v-model="productForm.supplier_id"
-                        class="form-select"
-                        required
-                    >
-                      <option disabled value="">Select supplier...</option>
-                      <option
-                          v-for="s in suppliers"
-                          :key="s.id"
-                          :value="s.id"
-                      >{{ s.name }}
-                      </option>
-                    </select>
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Quantity</label>
-                    <input
-                        type="number"
-                        min="0"
-                        v-model.number="productForm.quantity"
-                        class="form-control"
-                    />
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Purchase Price</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        v-model.number="productForm.purchase_price"
-                        class="form-control"
-                    />
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Sale Price</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        v-model.number="productForm.sale_price"
-                        class="form-control"
-                    />
-                  </div>
-                  <div class="col-12">
-                    <label class="form-label">Image</label>
-                    <input
-                        type="file"
-                        class="form-control"
-                        @change="handleImageUpload"
-                    />
-                    <div v-if="imagePreview" class="mt-2 text-center">
-                      <img
-                          :src="imagePreview"
-                          class="img-fluid"
-                          style="max-height: 200px;"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
-            <div class="modal-footer justify-content-end">
-              <button class="btn btn-secondary" @click="closeModal">Cancel</button>
-              <button
-                  v-if="isEdit"
-                  class="btn btn-warning me-auto"
-                  @click="openCalcModal"
-              >
-                Calculate Price
-              </button>
-              <button class="btn btn-primary" @click="saveProduct">
-                {{ isEdit ? 'Save' : 'Create' }}
-              </button>
-            </div>
-          </div>
-        </transition>
-      </div>
-    </div>
-    <div
-        class="modal-backdrop fade edit-backdrop"
-        :class="{ show: showModal }"
-    ></div>
-
+    <ProductAddEditModal
+        :visible="showModal"
+        :initial-product="isEdit ? productForm : null"
+        :categories="categories"
+        :units="units"
+        :suppliers="suppliers"
+        purchase-currency-symbol="¥"
+        :sale-currency-symbol="companyCurrencySymbol"
+        :read-only="productForm.is_archived"
+        @saved="onProductSaved"
+        @reference-created="onReferenceCreated"
+        @open-history="openHistory"
+        @close="closeModal"
+    />
     <!-- History Modal -->
     <div
         class="modal fade history-modal"
@@ -303,9 +189,9 @@
                 <tr v-for="(log, idx) in historyLogs" :key="idx">
                   <td>{{ log.changed_at }}</td>
                   <td>{{ log.changed_by }}</td>
-                  <td>{{ fieldLabel(log.field_name) }}</td>
-                  <td>{{ formatValue(log.field_name, log.old_value) }}</td>
-                  <td>{{ formatValue(log.field_name, log.new_value) }}</td>
+                  <td>{{ historyFieldLabel(log) }}</td>
+                  <td>{{ historyOldValue(log) }}</td>
+                  <td>{{ historyNewValue(log) }}</td>
                 </tr>
                 </tbody>
               </table>
@@ -321,65 +207,6 @@
       </div>
     </div>
     <div class="modal-backdrop fade history-backdrop" :class="{ show: showHistoryModal }"></div>
-
-    <!-- Calculate Price Modal -->
-    <div
-        class="modal fade calc-modal"
-        :class="{ show: showCalcModal }"
-        :style="showCalcModal ? 'display: block;' : ''"
-        tabindex="-1"
-    >
-      <div class="modal-dialog modal-dialog-centered">
-        <transition name="modal-fade">
-          <div class="modal-content" v-if="showCalcModal">
-            <div class="modal-header">
-              <h5 class="modal-title">Calculate Price</h5>
-              <button type="button" class="btn-close" @click="closeCalcModal"></button>
-            </div>
-            <div class="modal-body">
-              <!-- Поля для расчёта -->
-              <div class="mb-3">
-                <label>Price (CNY)</label>
-                <input v-model.number="calcForm.price_yuan" type="number" step="0.01" class="form-control"/>
-              </div>
-              <div class="mb-3">
-                <label>Units per Package</label>
-                <input v-model.number="calcForm.units_per_package" type="number" min="1" class="form-control"/>
-              </div>
-              <div class="mb-3">
-                <label>Weight (kg)</label>
-                <input v-model.number="calcForm.weight_kg" type="number" step="0.001" class="form-control"/>
-              </div>
-              <div class="row">
-                <div class="col-4 mb-3">
-                  <label>Length (m)</label>
-                  <input v-model.number="calcForm.length_m" type="number" step="0.001" class="form-control"/>
-                </div>
-                <div class="col-4 mb-3">
-                  <label>Width (m)</label>
-                  <input v-model.number="calcForm.width_m" type="number" step="0.001" class="form-control"/>
-                </div>
-                <div class="col-4 mb-3">
-                  <label>Height (m)</label>
-                  <input v-model.number="calcForm.height_m" type="number" step="0.001" class="form-control"/>
-                </div>
-              </div>
-
-              <!-- Результат -->
-              <div v-if="calcResult !== null" class="alert alert-info">
-                Calculated Sale Price: {{ calcResult }}
-              </div>
-            </div>
-            <div class="modal-footer">
-              <button class="btn btn-secondary" @click="closeCalcModal">Back</button>
-              <button class="btn btn-success" @click="doCalculate">Calculate</button>
-            </div>
-          </div>
-        </transition>
-      </div>
-    </div>
-    <div class="modal-backdrop fade" :class="{ show: showCalcModal }"></div>
-
 
     <!-- Image Preview Modal -->
     <div
@@ -421,6 +248,7 @@
 import axios from '../axios';
 import debounce from 'lodash/debounce';
 import AutocompleteInput from '../components/AutocompleteInput.vue';
+import ProductAddEditModal from '../components/ProductAddEditModal.vue';
 import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
 
 const TABLE_STATE_KEY = 'products-table-state';
@@ -428,28 +256,28 @@ const PAGE_SIZE = 50;
 
 export default {
   name: 'ProductView',
-  components: { AutocompleteInput },
+  components: { AutocompleteInput, ProductAddEditModal },
   data() {
     return {
       products: [],
+      currentUser: null,
       categories: [],
       units: [],
       suppliers: [],
       searchQuery: '',
-      filters: {category: '', supplierQuery: ''},
+      filters: {category: '', supplierQuery: '', archiveStatus: 'active'},
       page: 1,
       pageSize: PAGE_SIZE,
       totalCount: 0,
       isLoading: false,
       showModal: false,
-      showEditContent: true,
       isEdit: false,
       showHistoryContent: true,
       showHistoryModal: false,
       historyLogs: [],
       imageModalUrl: null,
-      imagePreview: null,
-      defaultForm: {},
+      toastMessage: '',
+      toastTimer: null,
       productForm: {
         id: null,
         name: '',
@@ -457,30 +285,27 @@ export default {
         category_id: null,
         unit_id: null,
         supplier_id: null,
-        quantity: 0,
         purchase_price: 0,
         sale_price: 0,
-        image: null,
-        created_at: null,
-        created_by: null,
-        updated_at: null,
-        updated_by: null,
-      },
-      systemSettings: null,
-      showCalcModal: false,
-      calcForm: {
-        price_yuan: 0,
         units_per_package: 1,
         weight_kg: 0,
         length_m: 0,
         width_m: 0,
         height_m: 0,
+        image: null,
+        created_at: null,
+        created_by: null,
+        updated_at: null,
+        updated_by: null,
+        is_archived: false,
+        archived_at: null,
+        archived_by: null,
+        has_history: false,
       },
-      calcResult: null,
+      systemSettings: null,
     };
   },
   created() {
-    this.defaultForm = {...this.productForm};
     this.restoreTableState();
     this.fetchAll();
   },
@@ -494,6 +319,12 @@ export default {
     pageEnd() {
       return Math.min(this.page * this.pageSize, this.totalCount);
     },
+    companyCurrencySymbol() {
+      return this.systemSettings?.company_currency_symbol || this.systemSettings?.company_currency_code || '';
+    },
+    isCompanyAdmin() {
+      return Boolean(this.currentUser?.is_company_admin);
+    },
   },
   methods: {
     onSearchInput: debounce(function () {
@@ -501,14 +332,24 @@ export default {
       this.saveTableState();
       this.fetchProducts();
     }, 300),
+    onFiltersChanged() {
+      this.page = 1;
+      this.saveTableState();
+      this.fetchProducts();
+    },
     async fetchAll() {
       await Promise.all([
         this.fetchProducts({ useCache: true }),
         this.fetchCategories(),
         this.fetchUnits(),
         this.fetchSuppliers(),
-        this.fetchSettings()
+        this.fetchSettings(),
+        this.fetchCurrentUser(),
       ]);
+    },
+    async fetchCurrentUser() {
+      const { data } = await axios.get('/api/me/');
+      this.currentUser = data;
     },
     async fetchSettings() {
       const res = await axios.get('/api/settings/');
@@ -570,7 +411,7 @@ export default {
     },
     resetFilters() {
       this.searchQuery = '';
-      this.filters = {category: '', supplierQuery: ''};
+      this.filters = {category: '', supplierQuery: '', archiveStatus: 'active'};
       this.page = 1;
       this.saveTableState();
       this.fetchProducts();
@@ -582,6 +423,7 @@ export default {
         search: this.searchQuery || undefined,
         category: this.filters.category || undefined,
         supplier_query: this.filters.supplierQuery || undefined,
+        archive_status: this.filters.archiveStatus || 'active',
       };
     },
     productsCacheKey() {
@@ -603,11 +445,15 @@ export default {
       const state = getSavedState(TABLE_STATE_KEY, {
         page: 1,
         searchQuery: '',
-        filters: {category: '', supplierQuery: ''},
+        filters: {category: '', supplierQuery: '', archiveStatus: 'active'},
       });
       this.page = state.page;
       this.searchQuery = state.searchQuery;
-      this.filters = state.filters;
+      this.filters = {
+        category: state.filters?.category || '',
+        supplierQuery: state.filters?.supplierQuery || '',
+        archiveStatus: state.filters?.archiveStatus || 'active',
+      };
     },
     changePage(page) {
       if (page < 1 || page > this.totalPages || page === this.page) return;
@@ -616,49 +462,103 @@ export default {
       this.fetchProducts({ useCache: true });
     },
     openModal() {
-      this.productForm = {...this.defaultForm};
+      this.productForm = {
+        id: null,
+        name: '',
+        sku: '',
+        category_id: null,
+        unit_id: null,
+        supplier_id: null,
+        purchase_price: 0,
+        sale_price: 0,
+        units_per_package: 1,
+        weight_kg: 0,
+        length_m: 0,
+        width_m: 0,
+        height_m: 0,
+        image: null,
+        created_at: null,
+        created_by: null,
+        updated_at: null,
+        updated_by: null,
+        is_archived: false,
+        archived_at: null,
+        archived_by: null,
+        has_history: false,
+      };
       this.isEdit = false;
       this.showModal = true;
-      this.imagePreview = null;
     },
     closeModal() {
       this.showModal = false;
     },
+    onProductSaved(product) {
+      const idx = this.products.findIndex(x => x.id === product.id);
+      if (idx !== -1) {
+        this.products.splice(idx, 1, product);
+      } else {
+        this.products.unshift(product);
+        this.totalCount += 1;
+      }
+      this.productForm = this.productToForm(product);
+      this.isEdit = true;
+      clearCacheByPrefix('products:');
+      this.fetchProducts();
+    },
+    onReferenceCreated({type, item}) {
+      if (type === 'category') {
+        this.categories.push(item);
+        setCachedJson('product-categories', this.categories);
+      } else if (type === 'unit') {
+        this.units.push(item);
+        setCachedJson('product-units', this.units);
+      } else if (type === 'supplier') {
+        this.suppliers.push(item);
+        setCachedJson('counterparty-options:supplier', this.suppliers);
+      }
+    },
     editProduct(item) {
-      this.productForm = {
+      this.productForm = this.productToForm(item);
+      this.isEdit = true;
+      this.showModal = true;
+    },
+    productToForm(item) {
+      return {
         id: item.id,
         name: item.name,
         sku: item.sku,
         category_id: item.category?.id || null,
         unit_id: item.unit?.id || null,
         supplier_id: item.supplier?.id || null,
-        quantity: item.quantity,
         purchase_price: item.purchase_price,
         sale_price: item.sale_price,
+        units_per_package: item.units_per_package ?? 1,
+        weight_kg: item.weight_kg ?? 0,
+        length_m: item.length_m ?? 0,
+        width_m: item.width_m ?? 0,
+        height_m: item.height_m ?? 0,
         image: null,
         created_at: item.created_at,
         created_by: item.created_by,
         updated_at: item.updated_at,
         updated_by: item.updated_by,
+        is_archived: item.is_archived || false,
+        archived_at: item.archived_at || null,
+        archived_by: item.archived_by || null,
+        has_history: item.has_history || false,
       };
-      this.isEdit = true;
-      this.showModal = true;
-      this.imagePreview = item.image || null;
     },
-    validateProductForm() {
-      if (!this.productForm.name?.trim()) {
-        alert('Please enter a product name');
-        return false;
-      }
-      if (!this.productForm.sku?.trim()) {
-        alert('Please enter SKU');
-        return false;
-      }
-      if (!this.productForm.supplier_id) {
-        alert('Please select a supplier');
-        return false;
-      }
-      return true;
+    showToast(message) {
+      this.toastMessage = message;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => {
+        this.toastMessage = '';
+      }, 1800);
+    },
+    formatMoney(value, symbol = '') {
+      const numberValue = Number(String(value ?? 0).replace(',', '.'));
+      const amount = Number.isFinite(numberValue) ? numberValue.toFixed(2) : value;
+      return symbol ? `${symbol} ${amount}` : amount;
     },
     formatApiError(error) {
       const data = error.response?.data;
@@ -681,50 +581,68 @@ export default {
           })
           .join('\n');
     },
-    async saveProduct() {
-      if (!this.validateProductForm()) return;
-      try {
-        const formData = new FormData();
-        Object.entries(this.productForm).forEach(([k, v]) => {
-          if (['id', 'created_at', 'created_by', 'updated_at', 'updated_by'].includes(k)) return;
-          if (v !== null && v !== undefined) formData.append(k, v);
-        });
-        const cfg = {headers: {'Content-Type': 'multipart/form-data'}};
-        let res;
-        if (this.isEdit && this.productForm.id) {
-          res = await axios.put(`/api/products/${this.productForm.id}/`, formData, cfg);
-          const idx = this.products.findIndex(x => x.id === this.productForm.id);
-          if (idx !== -1) this.products.splice(idx, 1, res.data);
-        } else {
-          res = await axios.post('/api/products/', formData, cfg);
-          this.products.unshift(res.data);
-        }
-        clearCacheByPrefix('products:');
-        this.closeModal();
-        this.fetchProducts();
-      } catch (err) {
-        console.error('Save error:', err.response?.data || err);
-        alert(this.formatApiError(err));
-      }
-    },
     async deleteProduct(id) {
-      if (confirm('Archive this product?')) {
-        await axios.delete(`/api/products/${id}/`);
-        clearCacheByPrefix('products:');
-        this.products = this.products.filter(x => x.id !== id);
-        this.totalCount = Math.max(0, this.totalCount - 1);
+      if (confirm('Delete this product permanently?')) {
+        try {
+          await axios.delete(`/api/products/${id}/`);
+          clearCacheByPrefix('products:');
+          this.products = this.products.filter(x => x.id !== id);
+          this.totalCount = Math.max(0, this.totalCount - 1);
+          this.showToast('Product deleted');
+        } catch (error) {
+          alert(this.formatApiError(error));
+        }
       }
     },
-    handleImageUpload(ev) {
-      const f = ev.target.files[0];
-      if (f) {
-        this.productForm.image = f;
-        this.imagePreview = URL.createObjectURL(f);
+    async archiveProduct(id) {
+      if (confirm('Move this product to archive?')) {
+        try {
+          const { data } = await axios.post(`/api/products/${id}/archive/`);
+          clearCacheByPrefix('products:');
+          if (this.filters.archiveStatus === 'active') {
+            this.products = this.products.filter(x => x.id !== id);
+            this.totalCount = Math.max(0, this.totalCount - 1);
+          } else {
+            const idx = this.products.findIndex(x => x.id === id);
+            if (idx !== -1) this.products.splice(idx, 1, data);
+          }
+          this.showToast('Product archived');
+        } catch (error) {
+          alert(this.formatApiError(error));
+        }
+      }
+    },
+    async restoreProduct(id) {
+      try {
+        const { data } = await axios.post(`/api/products/${id}/restore/`);
+        clearCacheByPrefix('products:');
+        if (this.filters.archiveStatus === 'archived') {
+          this.products = this.products.filter(x => x.id !== id);
+          this.totalCount = Math.max(0, this.totalCount - 1);
+        } else {
+          const idx = this.products.findIndex(x => x.id === id);
+          if (idx !== -1) this.products.splice(idx, 1, data);
+        }
+        this.showToast('Product restored');
+      } catch (error) {
+        alert(this.formatApiError(error));
+      }
+    },
+    async permanentlyDeleteProduct(id) {
+      if (confirm('Permanently delete this product? This action cannot be undone.')) {
+        try {
+          await axios.delete(`/api/products/${id}/permanent-delete/`);
+          clearCacheByPrefix('products:');
+          this.products = this.products.filter(x => x.id !== id);
+          this.totalCount = Math.max(0, this.totalCount - 1);
+          this.showToast('Product deleted');
+        } catch (error) {
+          alert(this.formatApiError(error));
+        }
       }
     },
     openHistory() {
       if (!this.isEdit) return;
-      this.showEditContent = false;
       axios.get(`/api/products/${this.productForm.id}/history/`)
           .then(res => {
             this.historyLogs = res.data;
@@ -735,7 +653,6 @@ export default {
     closeHistory() {
       this.showHistoryModal = false;
       this.showHistoryContent = false;
-      this.showEditContent = true;
     },
     fieldLabel(key) {
       const map = {
@@ -745,12 +662,24 @@ export default {
         category_id: 'Category',
         unit_id: 'Unit',
         supplier_id: 'Supplier',
-        quantity: 'Quantity',
         purchase_price: 'Purchase Price',
         sale_price: 'Sale Price',
         image: 'Image',
       };
       return map[key] || key;
+    },
+    isArchiveLog(log) {
+      return log.field_name === 'is_archived';
+    },
+    historyFieldLabel(log) {
+      if (!this.isArchiveLog(log)) return this.fieldLabel(log.field_name);
+      return log.new_value === 'True' ? 'Archived' : 'Restored';
+    },
+    historyOldValue(log) {
+      return this.isArchiveLog(log) ? '—' : this.formatValue(log.field_name, log.old_value);
+    },
+    historyNewValue(log) {
+      return this.isArchiveLog(log) ? '—' : this.formatValue(log.field_name, log.new_value);
     },
 
     formatValue(field, val) {
@@ -781,113 +710,6 @@ export default {
     },
     formatDate(val) {
       return val ? new Date(val).toLocaleString() : '—';
-    },
-    openCalcModal() {
-      Object.assign(this.calcForm, {
-        price_yuan: this.productForm.purchase_price ?? 0,
-        units_per_package: this.productForm.units_per_package ?? 1,
-        weight_kg: this.productForm.weight_kg ?? 0,
-        length_m: this.productForm.length_m ?? 0,
-        width_m: this.productForm.width_m ?? 0,
-        height_m: this.productForm.height_m ?? 0,
-      });
-      this.calcResult = null;
-      this.showEditContent = false;
-      this.showCalcModal = true;
-    },
-
-    closeCalcModal() {
-      this.showCalcModal = false;
-      this.showEditContent = true;
-    },
-    toNum(x) {
-      return parseFloat(String(x).replace(',', '.')) || 0;
-    },
-
-    async doCalculate() {
-      const s = this.systemSettings;
-      if (!s) return alert('Settings not loaded');
-
-      // 1) Парсим все настройки
-      const rateCNY = this.toNum(s.cny_to_local_rate);
-      const rateUSD = this.toNum(s.usd_to_local_rate);
-      const costPerKg = this.toNum(s.logistics_cost_per_kg_usd);
-
-      const marginPct = this.toNum(s.margin_pct);
-      const discountPct = this.toNum(s.discount_pct);
-      const taxPct = this.toNum(s.retail_tax_pct);
-      const acqPct = this.toNum(s.acquiring_pct);
-      const packPct = this.toNum(s.packaging_pct);
-
-      // 2) Входные поля
-      const pp = Number(this.productForm.purchase_price);
-      const up = Number(this.calcForm.units_per_package);
-      const w = Number(this.calcForm.weight_kg);
-
-      console.group('🔍 Price calc debug');
-      console.log({
-        pp, up, w, rateCNY, rateUSD, costPerKg,
-        marginPct, discountPct, taxPct, acqPct, packPct
-      });
-
-      // 3) unit_cost_local
-      const unit_cost_local = pp * rateCNY;
-      console.log('1) unit_cost_local =', unit_cost_local);
-
-      // 4) package_cost_local
-      const package_cost_local = unit_cost_local * up;
-      console.log('2) package_cost_local =', package_cost_local);
-
-      // 5) box_weight
-      const box_weight = w * up;
-      console.log('3) box_weight =', box_weight);
-
-      // 6) logistics
-      const logistics_usd = box_weight * costPerKg;
-      const logistics_local = logistics_usd * rateUSD;
-      console.log('4) logistics_usd =', logistics_usd,
-          '→ logistics_local =', logistics_local);
-
-      // 7) total_package_cost
-      const total_package_cost = package_cost_local + logistics_local;
-      console.log('5) total_package_cost =', total_package_cost);
-
-      // 8) cost_per_unit
-      const cost_per_unit = total_package_cost / up;
-      console.log('6) cost_per_unit =', cost_per_unit);
-
-      // 9) margin & discount
-      const with_margin = cost_per_unit * (1 + marginPct);
-      const after_discount = with_margin * (1 - discountPct);
-      console.log('7) with_margin =', with_margin,
-          '→ after_discount =', after_discount);
-
-      // 10) fees
-      const tax_fee = after_discount * taxPct;
-      const acq_fee = after_discount * acqPct;
-      const pack_fee = after_discount * packPct;
-      console.log('8) tax, acq, pack =', tax_fee, acq_fee, pack_fee);
-
-      // 11) finalPrice
-      const finalPrice = after_discount + tax_fee + acq_fee + pack_fee;
-      console.log('9) finalPrice =', finalPrice);
-      console.groupEnd();
-
-      // выводим и сохраняем
-      this.calcResult = parseFloat(finalPrice.toFixed(2));
-      try {
-        const {data} = await axios.patch(
-            `/api/products/${this.productForm.id}/`,
-            {sale_price: this.calcResult}
-        );
-        // обновляем локально
-        const idx = this.products.findIndex(p => p.id === data.id);
-        if (idx !== -1) this.products.splice(idx, 1, data);
-        this.productForm.sale_price = data.sale_price;
-      } catch (e) {
-        console.error('Save error:', e.response?.data || e);
-        alert(JSON.stringify(e.response?.data, null, 2));
-      }
     },
   }
 };
@@ -923,5 +745,57 @@ export default {
 
 .table td, .table th {
   vertical-align: middle;
+}
+
+.product-name-col {
+  min-width: 240px;
+}
+
+.actions-col {
+  min-width: 250px;
+}
+
+.actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 250px;
+}
+
+.actions-cell .btn {
+  white-space: nowrap;
+}
+
+.archived-product-row {
+  color: #6c757d;
+  background-color: #f8f9fa;
+}
+
+.save-toast {
+  position: fixed;
+  top: 82px;
+  left: 50%;
+  z-index: 1080;
+  min-width: 180px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid #badbcc;
+  border-radius: 0.375rem;
+  background: #d1e7dd;
+  color: #0f5132;
+  box-shadow: 0 8px 22px rgba(15, 81, 50, 0.16);
+  font-weight: 600;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.save-toast-enter-active,
+.save-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.save-toast-enter-from,
+.save-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
 }
 </style>

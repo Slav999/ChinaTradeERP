@@ -76,12 +76,6 @@
             <span v-else class="text-muted">—</span>
           </td>
           <td @click.stop>
-            <button
-                v-if="item.payment_details_qr"
-                class="btn btn-sm btn-secondary me-1"
-                @click="showQr(item.payment_details_qr)"
-            >QR
-            </button>
             <button class="btn btn-sm btn-danger" @click="deleteOrder(item.id)">
               Delete
             </button>
@@ -122,6 +116,7 @@ import AutocompleteInput from '../components/AutocompleteInput.vue';
 import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
 
 const TABLE_STATE_KEY = 'customer-orders-table-state';
+const STATUS_CACHE_KEY = 'customer-order-statuses:v2';
 const PAGE_SIZE = 50;
 
 export default {
@@ -189,7 +184,7 @@ export default {
     async fetchAux() {
       try {
         const cachedCustomers = getCachedJson('counterparty-options:customer');
-        const cachedStatuses = getCachedJson('customer-order-statuses');
+        const cachedStatuses = getCachedJson(STATUS_CACHE_KEY);
 
         if (cachedCustomers) this.customers = cachedCustomers;
         if (cachedStatuses) this.statuses = cachedStatuses;
@@ -207,7 +202,7 @@ export default {
         }
         if (!cachedStatuses) {
           this.statuses = responses[idx].data;
-          setCachedJson('customer-order-statuses', this.statuses);
+          setCachedJson(STATUS_CACHE_KEY, this.statuses);
         }
       } catch (e) {
         console.error(e);
@@ -320,9 +315,6 @@ export default {
         console.error(e);
         alert('Ошибка при удалении');
       }
-    },
-    showQr(url) {
-      window.open(url, '_blank');
     }
   }
 };

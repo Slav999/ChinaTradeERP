@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils import timezone
+from django_countries import countries
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -53,6 +54,16 @@ class RegisterView(generics.CreateAPIView):
     def perform_create(self, serializer):
         email = serializer.validated_data.get('email', '').lower()
         serializer.save(email=email)
+
+
+class BusinessCountryListView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response([
+            {'code': code, 'name': name}
+            for code, name in countries
+        ])
 
 
 class InviteUserView(generics.CreateAPIView):

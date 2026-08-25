@@ -1,31 +1,61 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from counterparties.models import Counterparty
 from core.models import BaseModel, ChangeLog
 from decimal import Decimal
+from users.company_defaults import company_defaults_for_country
 
 
 DEFAULT_COMPANY_SETTINGS = {
-    'cny_to_local_rate': Decimal('1.000000'),
-    'usd_to_local_rate': Decimal('1.000000'),
+    'cny_to_local_rate': Decimal('1.00'),
+    'usd_to_local_rate': Decimal('1.00'),
     'logistics_cost_per_kg_usd': Decimal('0.00'),
+    'internal_logistics_pct': Decimal('0.00'),
     'retail_tax_pct': Decimal('0.08'),
     'acquiring_pct': Decimal('0.01'),
     'packaging_pct': Decimal('0.01'),
     'margin_pct': Decimal('0.50'),
-    'discount_pct': Decimal('0.10'),
 }
 
 
 class ProductCategory(models.Model):
+    company = models.ForeignKey(
+        'users.Company',
+        on_delete=models.CASCADE,
+        related_name='product_categories',
+    )
     name = models.CharField(max_length=100)
+    margin_pct = models.DecimalField(
+        "Margin (%)",
+        max_digits=5,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        help_text="Leave empty to use company settings margin.",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_product_category_per_company'),
+        ]
 
     def __str__(self):
         return self.name
 
 
 class Unit(models.Model):
-    name = models.CharField(max_length=20, unique=True)
+    company = models.ForeignKey(
+        'users.Company',
+        on_delete=models.CASCADE,
+        related_name='product_units',
+    )
+    name = models.CharField(max_length=20)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_unit_per_company'),
+        ]
 
     def __str__(self):
         return self.name
@@ -38,12 +68,12 @@ class CompanySettings(models.Model):
         related_name='product_settings',
     )
     cny_to_local_rate = models.DecimalField(
-        "CNY → Local Rate", max_digits=12, decimal_places=6,
+        "CNY → Local Rate", max_digits=12, decimal_places=2,
         default=DEFAULT_COMPANY_SETTINGS['cny_to_local_rate'],
         help_text="Local currency units per 1 CNY"
     )
     usd_to_local_rate = models.DecimalField(
-        "USD → Local Rate", max_digits=12, decimal_places=6,
+        "USD → Local Rate", max_digits=12, decimal_places=2,
         default=DEFAULT_COMPANY_SETTINGS['usd_to_local_rate'],
         help_text="Local currency units per 1 USD"
     )
@@ -51,6 +81,11 @@ class CompanySettings(models.Model):
         "Logistics Cost (USD/kg)", max_digits=10, decimal_places=2,
         default=DEFAULT_COMPANY_SETTINGS['logistics_cost_per_kg_usd'],
         help_text="Cost of logistics per kilogram in USD"
+    )
+    internal_logistics_pct = models.DecimalField(
+        "Internal Logistics (%)", max_digits=5, decimal_places=4,
+        default=DEFAULT_COMPANY_SETTINGS['internal_logistics_pct'],
+        help_text="Enter 0.01 for 1%"
     )
     retail_tax_pct = models.DecimalField(
         "Retail Tax (%)", max_digits=5, decimal_places=4,
@@ -72,29 +107,38 @@ class CompanySettings(models.Model):
         default=Decimal('0.50'),
         help_text="Enter 0.10 for 10%"
     )
-    discount_pct = models.DecimalField(
-        "Discount (%)", max_digits=5, decimal_places=4,
-        default=Decimal('0.10'),
-        help_text="Enter 0.10 for 10%"
-    )
+    rates_updated_at = models.DateTimeField(null=True, blank=True)
+    settings_confirmed_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.company.name} Settings"
 
     @classmethod
-    def default_values(cls):
-        return DEFAULT_COMPANY_SETTINGS.copy()
+    def default_values(cls, country_code=None):
+        values = DEFAULT_COMPANY_SETTINGS.copy()
+        if country_code:
+            values['retail_tax_pct'] = company_defaults_for_country(country_code)['retail_tax_pct']
+        return values
+
+    def confirm_settings(self):
+        self.settings_confirmed_at = timezone.now()
+        self.save(update_fields=['settings_confirmed_at'])
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-        for product in Product.objects.filter(supplier__company=self.company):
+        for product in Product.objects.filter(company=self.company):
             product.sale_price = product.calculate_sale_price(self)
             product.save(update_fields=['sale_price'])
 
 
 class Product(BaseModel):
+    company = models.ForeignKey(
+        'users.Company',
+        on_delete=models.CASCADE,
+        related_name='products',
+    )
     name = models.CharField(max_length=255)
-    sku = models.CharField(max_length=100, unique=True)
+    sku = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     category = models.ForeignKey(
         ProductCategory,
@@ -106,6 +150,7 @@ class Product(BaseModel):
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     sale_price = models.DecimalField("Sale Price (Local)", max_digits=10, decimal_places=2, default=Decimal('0.00'))
     quantity = models.IntegerField(default=0)
+    is_stock_item = models.BooleanField(default=False)
     unit = models.ForeignKey(
         Unit,
         on_delete=models.SET_NULL,
@@ -177,22 +222,31 @@ class Product(BaseModel):
         # 5a) Cost per single unit
         cost_per_unit = total_package_cost / self.units_per_package
 
-        # 6) Margin & discount
-        with_margin = cost_per_unit * (1 + settings.margin_pct)
-        after_discount = with_margin * (1 - settings.discount_pct)
+        # 6) Internal logistics and margin
+        internal_logistics = cost_per_unit * settings.internal_logistics_pct
+        full_cost_per_unit = cost_per_unit + internal_logistics
+        margin_pct = self.category.margin_pct if self.category and self.category.margin_pct is not None else settings.margin_pct
+        with_margin = full_cost_per_unit * (1 + margin_pct)
 
         # 7) Fee sum
         fee_sum = (
-            after_discount * settings.retail_tax_pct +
-            after_discount * settings.acquiring_pct +
-            after_discount * settings.packaging_pct
+            with_margin * settings.retail_tax_pct +
+            with_margin * settings.acquiring_pct +
+            with_margin * settings.packaging_pct
         )
 
         # 8) Final per-unit price
-        return (after_discount + fee_sum).quantize(Decimal('0.01'))
+        return (with_margin + fee_sum).quantize(Decimal('0.01'))
 
     def save(self, *args, **kwargs):
+        if not self.company_id and self.supplier_id:
+            self.company = self.supplier.company
         super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'sku'], name='unique_product_sku_per_company'),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.sku})"

@@ -8,6 +8,7 @@ from supplier_orders.models import (
     SupplierOrderItem,
     SupplierOrderStatus,
 )
+from warehouse.services import sync_supplier_order
 
 
 class SupplierOrderCreationError(Exception):
@@ -21,6 +22,28 @@ def _money(value):
     return str((value or Decimal('0.00')).quantize(Decimal('0.01')))
 
 
+def _company_currency_payload(order):
+    company = order.customer.company if getattr(order, 'customer_id', None) else None
+    if not company and getattr(order, 'supplier_id', None):
+        company = order.supplier.company
+    if not company:
+        return {
+            'company_currency_code': 'KZT',
+            'company_currency_symbol': '₸',
+            'cny_to_local_rate': Decimal('1.000000'),
+        }
+    try:
+        settings = company.product_settings
+        cny_rate = settings.cny_to_local_rate
+    except Exception:
+        cny_rate = Decimal('1.000000')
+    return {
+        'company_currency_code': company.base_currency_code or 'KZT',
+        'company_currency_symbol': company.base_currency_symbol or company.base_currency_code or 'KZT',
+        'cny_to_local_rate': cny_rate,
+    }
+
+
 def _status_payload(status):
     if not status:
         return None
@@ -30,10 +53,21 @@ def _status_payload(status):
     }
 
 
-def customer_order_card(order):
+def customer_order_total_after_discount(order):
     total = Decimal('0.00')
     for item in order.items.select_related('product'):
-        total += (item.quantity or Decimal('0.00')) * (item.product.sale_price or Decimal('0.00'))
+        unit_price = item.product.sale_price or Decimal('0.00')
+        quantity = item.quantity or Decimal('0.00')
+        line_discount = item.discount_pct or Decimal('0.0000')
+        total += unit_price * quantity * (Decimal('1.0000') - line_discount)
+
+    order_discount = order.discount_pct or Decimal('0.0000')
+    return (total * (Decimal('1.0000') - order_discount)).quantize(Decimal('0.01'))
+
+
+def customer_order_card(order):
+    currency = _company_currency_payload(order)
+    total = customer_order_total_after_discount(order)
 
     return {
         'id': order.id,
@@ -42,16 +76,33 @@ def customer_order_card(order):
         'created_at': order.created_at,
         'status': _status_payload(order.status),
         'total_amount': _money(total),
+        'amount_company_currency': _money(total),
+        'company_currency_code': currency['company_currency_code'],
+        'company_currency_symbol': currency['company_currency_symbol'],
     }
 
 
+def supplier_order_items_total_cny(order):
+    total = Decimal('0.00')
+    for item in order.items.select_related('product'):
+        unit_price = item.unit_price_cny
+        if unit_price is None:
+            unit_price = item.product.purchase_price or Decimal('0.00')
+        total += (item.quantity or Decimal('0.00')) * (unit_price or Decimal('0.00'))
+    return total.quantize(Decimal('0.01'))
+
+
 def supplier_order_card(order):
+    currency = {
+        'company_currency_code': order.company_currency_code or order.company.base_currency_code,
+        'company_currency_symbol': order.company_currency_symbol or order.company.base_currency_symbol,
+        'cny_to_local_rate': order.cny_to_local_rate,
+    }
     if order.amount_cny is not None:
         total = order.amount_cny
     else:
-        total = Decimal('0.00')
-        for item in order.items.select_related('product'):
-            total += (item.quantity or Decimal('0.00')) * (item.product.purchase_price or Decimal('0.00'))
+        total = supplier_order_items_total_cny(order)
+    total_local = total * currency['cny_to_local_rate']
 
     return {
         'id': order.id,
@@ -60,6 +111,12 @@ def supplier_order_card(order):
         'created_at': order.created_at,
         'status': _status_payload(order.status),
         'total_amount': _money(total),
+        'amount_original': _money(total),
+        'currency_original': 'CNY',
+        'currency_original_symbol': '¥',
+        'amount_company_currency': _money(total_local),
+        'company_currency_code': currency['company_currency_code'],
+        'company_currency_symbol': currency['company_currency_symbol'],
         'supplier_name': order.supplier.name if order.supplier else '',
     }
 
@@ -84,9 +141,15 @@ def build_supplier_order_related_documents(supplier_order):
             'children': [supplier_order_card(supplier_order)],
         }
 
+    supplier_orders = (
+        supplier_order.customer_order.supplier_orders
+        .select_related('supplier', 'status')
+        .prefetch_related('items__product')
+        .order_by('created_at', 'id')
+    )
     return {
         'root': customer_order_card(supplier_order.customer_order),
-        'children': [supplier_order_card(supplier_order)],
+        'children': [supplier_order_card(order) for order in supplier_orders],
     }
 
 
@@ -119,7 +182,7 @@ def _merge_supplier_items(customer_items):
 
 
 def create_supplier_orders_for_customer_order(customer_order, user):
-    if customer_order.customer and customer_order.customer.company_id != user.company_id:
+    if customer_order.company_id != user.company_id:
         raise SupplierOrderCreationError('Order is not available for this company.', status_code=403)
 
     items = list(
@@ -130,7 +193,7 @@ def create_supplier_orders_for_customer_order(customer_order, user):
     if not items:
         raise SupplierOrderCreationError('Customer order has no positions.')
 
-    default_status = SupplierOrderStatus.objects.order_by('id').first()
+    default_status = SupplierOrderStatus.objects.filter(company=customer_order.company).order_by('id').first()
     if not default_status:
         raise SupplierOrderCreationError('Supplier order status is not configured.')
 
@@ -177,17 +240,34 @@ def create_supplier_orders_for_customer_order(customer_order, user):
                             existing_item.save(update_fields=['quantity', 'unit', 'comment'])
                             changed = True
                     else:
-                        new_items.append(SupplierOrderItem(order=supplier_order, **item_data))
+                        new_items.append(SupplierOrderItem(
+                            order=supplier_order,
+                            unit_price_cny=item_data['product'].purchase_price or Decimal('0.00'),
+                            **item_data,
+                        ))
                 if new_items:
                     SupplierOrderItem.objects.bulk_create(new_items)
                     changed = True
+                total_cny = supplier_order_items_total_cny(supplier_order)
+                amount_changed = supplier_order.amount_cny != total_cny
+                if amount_changed:
+                    supplier_order.amount_cny = total_cny
                 if changed:
                     supplier_order.updated_by = user
-                    supplier_order.save(update_fields=['updated_by'])
+                    update_fields = ['updated_by']
+                    if amount_changed:
+                        update_fields.append('amount_cny')
+                    supplier_order.save(update_fields=update_fields)
+                    sync_supplier_order(supplier_order, user)
+                    updated_orders.append(supplier_order)
+                elif amount_changed:
+                    supplier_order.updated_by = user
+                    supplier_order.save(update_fields=['amount_cny', 'updated_by'])
                     updated_orders.append(supplier_order)
                 continue
 
             supplier_order = SupplierOrder.objects.create(
+                company=customer_order.company,
                 supplier_id=supplier_id,
                 customer=customer_order.customer,
                 customer_order=customer_order,
@@ -200,9 +280,16 @@ def create_supplier_orders_for_customer_order(customer_order, user):
                 updated_by=user,
             )
             SupplierOrderItem.objects.bulk_create([
-                SupplierOrderItem(order=supplier_order, **item_data)
+                SupplierOrderItem(
+                    order=supplier_order,
+                    unit_price_cny=item_data['product'].purchase_price or Decimal('0.00'),
+                    **item_data,
+                )
                 for item_data in merged_items
             ])
+            supplier_order.amount_cny = supplier_order_items_total_cny(supplier_order)
+            supplier_order.save(update_fields=['amount_cny'])
+            sync_supplier_order(supplier_order, user)
             created_orders.append(supplier_order)
 
     return {

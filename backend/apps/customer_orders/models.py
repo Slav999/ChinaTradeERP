@@ -3,24 +3,37 @@ from core.models import BaseModel, ChangeLog
 from counterparties.models import Counterparty
 from products.models import Product
 from django.db.models import Max
+from decimal import Decimal
+from users.models import Company
 
 
-def get_default_shipping_address():
+def get_default_shipping_address(company=None):
     """
     Returns the default shipping address from the single ShippingAddress record (if any).
     """
-    addr = ShippingAddress.objects.first()
+    if company:
+        addr = ShippingAddress.objects.filter(company=company).first()
+    else:
+        addr = ShippingAddress.objects.first()
     return addr.default_shipping_address if addr else ''
 
 
 class CustomerOrderStatus(models.Model):
     """Statuses for customer orders (admin can add/edit)"""
-    name = models.CharField("Name", max_length=100, unique=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='customer_order_statuses',
+    )
+    name = models.CharField("Name", max_length=100)
     color = models.CharField("Color (hex)", max_length=7, default="#007bff")
 
     class Meta:
         verbose_name = "Customer Order Status"
         verbose_name_plural = "Customer Order Statuses"
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'name'], name='unique_customer_order_status_per_company'),
+        ]
 
     def __str__(self):
         return self.name
@@ -28,6 +41,11 @@ class CustomerOrderStatus(models.Model):
 
 class ShippingAddress(models.Model):
     """Settings: default shipping address"""
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='customer_shipping_address',
+    )
     default_shipping_address = models.TextField(
         "Default Shipping Address", blank=True
     )
@@ -42,8 +60,13 @@ class ShippingAddress(models.Model):
 
 class CustomerOrder(BaseModel):
     """Customer order"""
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='customer_orders',
+    )
     order_number = models.CharField(
-        "Order Number", max_length=50, unique=True
+        "Order Number", max_length=50
     )
     created_at = models.DateTimeField(
         "Creation Date", auto_now_add=True
@@ -67,7 +90,6 @@ class CustomerOrder(BaseModel):
     )
     shipping_address = models.TextField(
         "Shipping Address",
-        default=get_default_shipping_address,
         blank=True,
     )
     shipping_code = models.CharField(
@@ -76,20 +98,39 @@ class CustomerOrder(BaseModel):
     shipment_date = models.DateField(
         "Shipment Date", blank=True, null=True
     )
+    discount_pct = models.DecimalField(
+        "Order Discount (%)",
+        max_digits=5,
+        decimal_places=4,
+        default=Decimal('0.0000'),
+    )
+    customer_comment = models.TextField(
+        "Comment for Customer",
+        blank=True,
+    )
+    internal_comment = models.TextField(
+        "Internal Comment",
+        blank=True,
+    )
 
     class Meta:
         verbose_name = "Customer Order"
         verbose_name_plural = "Customer Orders"
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'order_number'], name='unique_customer_order_number_per_company'),
+        ]
 
     def save(self, *args, **kwargs):
+        if not self.company_id and self.customer_id:
+            self.company = self.customer.company
         # apply default shipping address if not provided
         if not self.shipping_address:
-            self.shipping_address = get_default_shipping_address()
+            self.shipping_address = get_default_shipping_address(self.company if self.company_id else None)
         # auto-generate order number if not set
         if not self.order_number:
             last_id = (
-                CustomerOrder.objects.aggregate(Max('id')).get('id__max') or 0
+                CustomerOrder.objects.filter(company=self.company).aggregate(Max('id')).get('id__max') or 0
             )
             self.order_number = str(last_id + 1)
         super().save(*args, **kwargs)
@@ -123,6 +164,12 @@ class CustomerOrderItem(models.Model):
     )
     comment = models.TextField(
         "Line Comment", blank=True
+    )
+    discount_pct = models.DecimalField(
+        "Line Discount (%)",
+        max_digits=5,
+        decimal_places=4,
+        default=Decimal('0.0000'),
     )
 
     class Meta:

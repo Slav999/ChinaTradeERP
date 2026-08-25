@@ -12,7 +12,7 @@ class ProductAdmin(admin.ModelAdmin):
 
 @admin.register(CompanySettings)
 class CompanySettingsAdmin(admin.ModelAdmin):
-    list_display = ('company', 'cny_to_local_rate', 'usd_to_local_rate', 'margin_pct', 'discount_pct')
+    list_display = ('company', 'cny_to_local_rate', 'usd_to_local_rate', 'internal_logistics_pct', 'margin_pct')
     search_fields = ('company__name',)
 
 

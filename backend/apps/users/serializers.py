@@ -3,6 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
 from django.utils import timezone
+from django_countries import countries
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -11,6 +12,8 @@ import random
 import re
 
 from .access import ensure_default_access_structure
+from .company_defaults import company_defaults_for_country
+from .company_setup import ensure_default_company_directories
 from .models import AccessRole, Company, CompanyMembership, Department, Invitation
 from .utils import send_invitation_email, send_verification_email
 
@@ -48,10 +51,11 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     password2 = serializers.CharField(write_only=True)
     company_name = serializers.CharField(write_only=True)
+    business_country = serializers.ChoiceField(choices=countries, write_only=True)
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'password2', 'company_name')
+        fields = ('id', 'username', 'email', 'password', 'password2', 'company_name', 'business_country')
         read_only_fields = ('id',)
 
     def validate_email(self, value):
@@ -79,11 +83,15 @@ class RegisterSerializer(serializers.ModelSerializer):
                 % company_name
             )
 
+        if not data.get('business_country'):
+            raise serializers.ValidationError("Country of business is required.")
+
         return data
 
     def create(self, validated_data):
         validated_data.pop('password2')
         company_name = validated_data.pop('company_name').strip()
+        business_country = validated_data.pop('business_country')
 
         code = generate_numeric_code()
         user = User.objects.create_user(
@@ -96,8 +104,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
         send_verification_email(user.email, code)
 
-        company = Company.objects.create(name=company_name, created_by=user)
+        company_defaults = company_defaults_for_country(business_country)
+        company = Company(name=company_name, created_by=user)
+        company.apply_country_defaults(company_defaults['business_country'])
+        company.save()
         roles = ensure_default_access_structure(company)
+        ensure_default_company_directories(company)
 
         user.company = company
         user.is_company_admin = True
@@ -112,6 +124,14 @@ class RegisterSerializer(serializers.ModelSerializer):
                 'is_company_admin': True,
             },
         )
+        from products.currency import refresh_company_rates
+        from products.models import CompanySettings
+
+        settings = CompanySettings.objects.create(
+            company=company,
+            **CompanySettings.default_values(company.business_country),
+        )
+        refresh_company_rates(company, settings)
 
         return user
 
@@ -431,6 +451,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.ImageField(required=False, allow_null=True)
     company_name = serializers.CharField(source='company.name', read_only=True)
+    company_business_country = serializers.SerializerMethodField()
+    company_business_country_name = serializers.SerializerMethodField()
+    company_currency_code = serializers.CharField(source='company.base_currency_code', read_only=True)
+    company_currency_symbol = serializers.CharField(source='company.base_currency_symbol', read_only=True)
+    company_settings_needs_review = serializers.SerializerMethodField()
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     access_role_name = serializers.CharField(source='access_role.name', read_only=True)
     department_ref_name = serializers.CharField(source='department_ref.name', read_only=True)
@@ -440,6 +465,8 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'username', 'email', 'role', 'role_display', 'company_id', 'company_name',
+            'company_business_country', 'company_business_country_name',
+            'company_currency_code', 'company_currency_symbol', 'company_settings_needs_review',
             'is_company_admin', 'access_role', 'access_role_name', 'department_ref',
             'department_ref_name', 'first_name', 'last_name', 'middle_name', 'phone',
             'work_email', 'personal_email', 'position', 'department',
@@ -447,6 +474,8 @@ class UserSerializer(serializers.ModelSerializer):
         )
         read_only_fields = (
             'id', 'username', 'email', 'role', 'role_display', 'company_id', 'company_name',
+            'company_business_country', 'company_business_country_name',
+            'company_currency_code', 'company_currency_symbol', 'company_settings_needs_review',
             'is_company_admin', 'access_role', 'access_role_name', 'department_ref',
             'department_ref_name', 'memberships',
         )
@@ -456,3 +485,20 @@ class UserSerializer(serializers.ModelSerializer):
             'company', 'department', 'access_role'
         ).filter(status=CompanyMembership.STATUS_ACTIVE)
         return CompanyMembershipSerializer(memberships, many=True).data
+
+    def get_company_business_country(self, obj):
+        return str(obj.company.business_country) if obj.company_id else ''
+
+    def get_company_business_country_name(self, obj):
+        if not obj.company_id or not obj.company.business_country:
+            return ''
+        return obj.company.business_country.name
+
+    def get_company_settings_needs_review(self, obj):
+        if not obj.company_id or not obj.is_company_admin:
+            return False
+        try:
+            company_settings = obj.company.product_settings
+        except Exception:
+            return True
+        return company_settings.settings_confirmed_at is None

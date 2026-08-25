@@ -54,6 +54,16 @@
           </li>
           <li class="nav-item mx-lg-3">
             <RouterLink
+                to="/warehouse"
+                class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/warehouse') }"
+            >
+              <i class="bi bi-boxes fs-4"></i>
+              <div class="small mt-1 d-none d-lg-block">Warehouse</div>
+            </RouterLink>
+          </li>
+          <li class="nav-item mx-lg-3">
+            <RouterLink
                 to="/counterparty"
                 class="nav-link text-center"
                 :class="{ 'section-active': isSectionActive('/counterparty') }"

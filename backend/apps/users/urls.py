@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     AcceptInvitationView,
     AccessRoleListView,
+    BusinessCountryListView,
     CookieTokenRefreshView,
     CompanyMembershipListView,
     DepartmentListView,
@@ -23,6 +24,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('business-countries/', BusinessCountryListView.as_view(), name='business_countries'),
     path('register/', RegisterView.as_view(), name='register'),
     path('invite/', InviteUserView.as_view(), name='invite_user'),
     path('invitations/', InvitationListCreateView.as_view(), name='invitations'),

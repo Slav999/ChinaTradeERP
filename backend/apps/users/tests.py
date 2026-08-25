@@ -1,8 +1,33 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from decimal import Decimal
+from unittest.mock import patch
 from rest_framework.test import APIClient, APITestCase
 
+from products.models import CompanySettings
 from users.models import Company, CompanyMembership
+
+
+class RegistrationCompanyDefaultsTests(APITestCase):
+    @patch('products.currency.refresh_company_rates')
+    def test_register_sets_business_country_currency_and_example_tax(self, refresh_rates):
+        response = self.client.post('/api/auth/register/', {
+            'company_name': 'Kazakhstan Trade',
+            'business_country': 'KZ',
+            'username': 'owner',
+            'email': 'owner@example.com',
+            'password': 'StrongPass123',
+            'password2': 'StrongPass123',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        company = Company.objects.get(name='Kazakhstan Trade')
+        settings_obj = CompanySettings.objects.get(company=company)
+        self.assertEqual(str(company.business_country), 'KZ')
+        self.assertEqual(company.base_currency_code, 'KZT')
+        self.assertEqual(company.base_currency_symbol, '₸')
+        self.assertEqual(settings_obj.retail_tax_pct, Decimal('0.20'))
+        refresh_rates.assert_called_once()
 
 
 class CookieAuthenticationTests(APITestCase):

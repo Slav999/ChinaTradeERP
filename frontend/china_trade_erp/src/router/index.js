@@ -12,6 +12,7 @@ import ProfilePage from '../views/ProfilePage.vue'
 import SupplierOrdersPage from '../views/SupplierOrdersPage.vue'
 import CustomerOrdersPage from '../views/CustomerOrdersPage.vue'
 import ProductsPage from '../views/ProductsPage.vue'
+import WarehousePage from '../views/WarehousePage.vue'
 import CounterpartyPage from '../views/CounterpartyPage.vue'
 import SupplierOrderDetail from '../views/SupplierOrderDetail.vue'
 import CustomerOrderDetail from '../views/CustomerOrderDetail.vue'
@@ -37,6 +38,7 @@ const routes = [
     {path: '/customer-orders/new', component: CustomerOrderDetail},
     {path: '/customer-orders/:id', component: CustomerOrderDetail, props: true},
     {path: '/products', component: ProductsPage},
+    {path: '/warehouse', component: WarehousePage},
     {path: '/counterparty', component: CounterpartyPage},
 ]
 

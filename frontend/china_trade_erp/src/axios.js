@@ -1,6 +1,8 @@
 import axios from 'axios';
 
 const AUTH_SESSION_KEY = 'auth_session';
+let refreshRequest = null;
+let isRedirectingToLogin = false;
 
 function getCookie(name) {
   return document.cookie
@@ -50,12 +52,21 @@ api.interceptors.response.use(
     ) {
       original._retry = true;
       try {
-        await api.post('/api/auth/refresh/', {});
+        if (!refreshRequest) {
+          refreshRequest = api.post('/api/auth/refresh/', {})
+            .finally(() => {
+              refreshRequest = null;
+            });
+        }
+        await refreshRequest;
         localStorage.setItem(AUTH_SESSION_KEY, '1');
         return api(original);
       } catch (refreshError) {
         clearClientSession();
-        window.location.href = '/login';
+        if (!isRedirectingToLogin && window.location.pathname !== '/login') {
+          isRedirectingToLogin = true;
+          window.location.assign('/login');
+        }
         return Promise.reject(refreshError);
       }
     }

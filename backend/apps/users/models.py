@@ -1,13 +1,29 @@
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django_countries.fields import CountryField
 from django.utils.crypto import get_random_string
 from django.utils import timezone
 import hashlib
 import secrets
 
+from .company_defaults import (
+    DEFAULT_CURRENCY,
+    DEFAULT_LOCALE,
+    company_defaults_for_country,
+)
+
 class Company(models.Model):
     name = models.CharField(max_length=255, unique=True)
+    business_country = CountryField(blank=True, default='')
+    base_currency_code = models.CharField(max_length=3, default=DEFAULT_CURRENCY, blank=True)
+    base_currency_symbol = models.CharField(max_length=12, default='₸', blank=True)
+    locale_code = models.CharField(max_length=20, default=DEFAULT_LOCALE, blank=True)
+    logo = models.ImageField(upload_to='company_logos/', blank=True, null=True)
+    work_email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    address = models.TextField(blank=True)
+    bank_details = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -15,6 +31,14 @@ class Company(models.Model):
         on_delete=models.SET_NULL,
         related_name='companies_created'
     )
+
+    def apply_country_defaults(self, country_code=None):
+        defaults = company_defaults_for_country(country_code or self.business_country)
+        self.business_country = defaults['business_country']
+        self.base_currency_code = defaults['base_currency_code']
+        self.base_currency_symbol = defaults['base_currency_symbol']
+        self.locale_code = defaults['locale_code']
+        return defaults
 
     def __str__(self):
         return self.name

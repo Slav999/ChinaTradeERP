@@ -4,26 +4,8 @@
       <div class="profile-header">
         <div class="avatar-wrap">
           <div class="profile-avatar-frame">
-            <div
-                v-if="isEditing && avatarPreview"
-                class="avatar-crop-viewport"
-                @pointerdown="startAvatarDrag"
-                @pointermove="dragAvatar"
-                @pointerup="endAvatarDrag"
-                @pointercancel="endAvatarDrag"
-                @wheel.prevent="zoomAvatar"
-            >
-              <img :src="avatarPreview" :style="avatarPreviewStyle" alt="Avatar crop preview" />
-            </div>
-            <img v-else-if="avatarSrc" :src="avatarSrc" class="profile-avatar" alt="Profile avatar" />
+            <img v-if="avatarSrc" :src="avatarSrc" class="profile-avatar" alt="Profile avatar" />
             <div v-else class="profile-avatar avatar-placeholder">{{ initials }}</div>
-          </div>
-          <label v-if="isEditing" class="btn btn-sm btn-outline-primary avatar-action">
-            Change photo
-            <input type="file" accept="image/*" hidden @change="handleAvatarChange" />
-          </label>
-          <div v-if="isEditing && avatarPreview" class="avatar-hint">
-            Drag photo, use mouse wheel to zoom
           </div>
         </div>
 
@@ -51,36 +33,26 @@
         </div>
 
         <div class="profile-actions">
-          <template v-if="!isEditing">
-            <button
-                v-if="profile.is_company_admin"
-                class="btn btn-outline-primary px-3"
-                @click="openInviteModal"
-            >
-              Invite employee
-            </button>
-            <button
-                v-if="profile.is_company_admin"
-                class="btn btn-outline-primary px-3"
-                @click="openSettingsModal"
-            >
-              Company settings
-            </button>
-            <button class="btn btn-primary px-3" @click="startEditing">
-              Edit profile
-            </button>
-            <button class="btn btn-outline-danger px-3" :disabled="isLoggingOut" @click="logout">
-              {{ isLoggingOut ? 'Logging out...' : 'Logout' }}
-            </button>
-          </template>
-          <template v-else>
-            <button class="btn btn-outline-secondary me-2" :disabled="isSaving" @click="cancelEditing">
-              Cancel
-            </button>
-            <button class="btn btn-primary px-4" :disabled="isSaving" @click="saveProfile">
-              {{ isSaving ? 'Saving...' : 'Save' }}
-            </button>
-          </template>
+          <button
+              v-if="profile.is_company_admin"
+              class="btn btn-outline-primary px-3"
+              @click="openInviteModal"
+          >
+            Invite employee
+          </button>
+          <button
+              v-if="profile.is_company_admin"
+              class="btn btn-outline-primary px-3"
+              @click="openSettingsModal"
+          >
+            Company settings
+          </button>
+          <button class="btn btn-primary px-3" @click="startEditing">
+            Edit profile
+          </button>
+          <button class="btn btn-outline-danger px-3" :disabled="isLoggingOut" @click="logout">
+            {{ isLoggingOut ? 'Logging out...' : 'Logout' }}
+          </button>
         </div>
       </div>
 
@@ -89,7 +61,7 @@
           <h2>Contact information</h2>
         </div>
 
-        <div v-if="!isEditing" class="profile-fields">
+        <div class="profile-fields">
           <div v-for="field in contactFields" :key="field.key" class="profile-field">
             <div class="field-label">{{ field.label }}</div>
             <div :class="['field-value', { empty: !field.value }]">
@@ -97,56 +69,115 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
 
-        <form v-else class="row gy-3 profile-form" @submit.prevent="saveProfile">
-          <div class="col-md-4">
-            <label class="form-label">First name</label>
-            <input v-model.trim="form.first_name" class="form-control" />
+    <div
+        class="modal fade profile-modal"
+        :class="{ show: isEditing }"
+        :style="isEditing ? 'display: block;' : ''"
+        tabindex="-1"
+    >
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <transition name="modal-fade">
+          <div class="modal-content" v-if="isEditing">
+            <div class="modal-header">
+              <div>
+                <h5 class="modal-title">Edit profile</h5>
+                <div class="text-muted small">Update your contact information and photo</div>
+              </div>
+              <button type="button" class="btn-close" aria-label="Close" @click="cancelEditing"></button>
+            </div>
+            <form @submit.prevent="saveProfile">
+              <div class="modal-body">
+                <div class="profile-edit-layout">
+                  <div class="profile-edit-photo">
+                    <div class="profile-avatar-frame">
+                      <div
+                          v-if="avatarPreview"
+                          class="avatar-crop-viewport"
+                          @pointerdown="startAvatarDrag"
+                          @pointermove="dragAvatar"
+                          @pointerup="endAvatarDrag"
+                          @pointercancel="endAvatarDrag"
+                          @wheel.prevent="zoomAvatar"
+                      >
+                        <img :src="avatarPreview" :style="avatarPreviewStyle" alt="Avatar crop preview" />
+                      </div>
+                      <img v-else-if="avatarSrc" :src="avatarSrc" class="profile-avatar" alt="Profile avatar" />
+                      <div v-else class="profile-avatar avatar-placeholder">{{ initials }}</div>
+                    </div>
+                    <label class="btn btn-sm btn-outline-primary avatar-action">
+                      Change photo
+                      <input type="file" accept="image/*" hidden @change="handleAvatarChange" />
+                    </label>
+                    <div v-if="avatarPreview" class="avatar-hint">
+                      Drag photo, use mouse wheel to zoom
+                    </div>
+                  </div>
+
+                  <div class="row gy-3 profile-form">
+                    <div class="col-md-4">
+                      <label class="form-label">First name</label>
+                      <input v-model.trim="form.first_name" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Last name</label>
+                      <input v-model.trim="form.last_name" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Middle name</label>
+                      <input v-model.trim="form.middle_name" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Mobile phone</label>
+                      <input v-model.trim="form.phone" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Work email</label>
+                      <input v-model.trim="form.work_email" type="email" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Personal email</label>
+                      <input v-model.trim="form.personal_email" type="email" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Department</label>
+                      <input v-model.trim="form.department" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Position</label>
+                      <input v-model.trim="form.position" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Notification language</label>
+                      <select v-model="form.notification_language" class="form-select">
+                        <option value="ru">Russian</option>
+                        <option value="en">English</option>
+                      </select>
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Birth date</label>
+                      <input v-model="form.birth_date" type="date" class="form-control" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">Hire date</label>
+                      <input v-model="form.hire_date" type="date" class="form-control" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" :disabled="isSaving" @click="cancelEditing">
+                  Cancel
+                </button>
+                <button type="submit" class="btn btn-primary px-4" :disabled="isSaving">
+                  {{ isSaving ? 'Saving...' : 'Save profile' }}
+                </button>
+              </div>
+            </form>
           </div>
-          <div class="col-md-4">
-            <label class="form-label">Last name</label>
-            <input v-model.trim="form.last_name" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Middle name</label>
-            <input v-model.trim="form.middle_name" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Mobile phone</label>
-            <input v-model.trim="form.phone" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Work email</label>
-            <input v-model.trim="form.work_email" type="email" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Personal email</label>
-            <input v-model.trim="form.personal_email" type="email" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Department</label>
-            <input v-model.trim="form.department" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Position</label>
-            <input v-model.trim="form.position" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Notification language</label>
-            <select v-model="form.notification_language" class="form-select">
-              <option value="ru">Russian</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Birth date</label>
-            <input v-model="form.birth_date" type="date" class="form-control" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Hire date</label>
-            <input v-model="form.hire_date" type="date" class="form-control" />
-          </div>
-        </form>
+        </transition>
       </div>
     </div>
 
@@ -405,38 +436,187 @@
               <div class="modal-body">
                 <div v-if="isLoadingSettings" class="text-muted">Loading settings...</div>
                 <div v-else class="row gy-3">
+                  <div class="col-md-6 country-picker">
+                    <label class="form-label">Country of business</label>
+                    <input
+                      v-model="settingsCountrySearch"
+                      type="text"
+                      class="form-control"
+                      required
+                      placeholder="Start typing a country..."
+                      autocomplete="off"
+                      @focus="showSettingsCountrySuggestions = true"
+                      @input="onSettingsCountrySearchInput"
+                      @keydown.down.prevent="moveSettingsCountryHighlight(1)"
+                      @keydown.up.prevent="moveSettingsCountryHighlight(-1)"
+                      @keydown.enter.prevent="selectHighlightedSettingsCountry"
+                      @keydown.esc="showSettingsCountrySuggestions = false"
+                      @blur="hideSettingsCountrySuggestions"
+                    />
+                    <div
+                      v-if="showSettingsCountrySuggestions && filteredSettingsCountries.length"
+                      class="country-suggestions list-group shadow-sm"
+                    >
+                      <button
+                        v-for="(country, index) in filteredSettingsCountries"
+                        :key="country.code"
+                        type="button"
+                        class="list-group-item list-group-item-action"
+                        :class="{ active: index === highlightedSettingsCountryIndex }"
+                        @mousedown.prevent="selectSettingsCountry(country)"
+                      >
+                        <span>{{ country.name }}</span>
+                        <span class="text-muted small ms-2">{{ country.code }}</span>
+                      </button>
+                    </div>
+                    <div class="form-text">Changing country updates the company currency, exchange rates, and default tax rate.</div>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Currency</label>
+                    <input :value="settingsForm.company_currency_code || '-'" class="form-control" disabled />
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label">Symbol</label>
+                    <input :value="settingsForm.company_currency_symbol || '-'" class="form-control" disabled />
+                  </div>
+                  <div class="col-12">
+                    <hr class="my-2" />
+                    <h6 class="mb-0">Company details for documents</h6>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Company logo</label>
+                    <input type="file" accept="image/*" class="form-control" @change="handleCompanyLogoChange" />
+                    <div v-if="companyLogoPreview || settingsForm.company_logo_url" class="company-logo-preview mt-2">
+                      <img :src="companyLogoPreview || settingsForm.company_logo_url" alt="Company logo" />
+                    </div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Work email</label>
+                    <input v-model.trim="settingsForm.company_work_email" type="email" class="form-control" />
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Company phone</label>
+                    <input v-model.trim="settingsForm.company_phone" type="text" class="form-control" />
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Company address</label>
+                    <textarea v-model.trim="settingsForm.company_address" class="form-control" rows="2"></textarea>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Bank details</label>
+                    <textarea v-model.trim="settingsForm.company_bank_details" class="form-control" rows="2"></textarea>
+                  </div>
+                  <div class="col-12">
+                    <hr class="my-2" />
+                    <h6 class="mb-0">Pricing settings</h6>
+                  </div>
                   <div class="col-md-4">
                     <label class="form-label">CNY to local rate</label>
-                    <input v-model="settingsForm.cny_to_local_rate" type="number" step="0.000001" min="0" class="form-control" required />
+                    <input v-model="settingsForm.cny_to_local_rate" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-4">
                     <label class="form-label">USD to local rate</label>
-                    <input v-model="settingsForm.usd_to_local_rate" type="number" step="0.000001" min="0" class="form-control" required />
+                    <input v-model="settingsForm.usd_to_local_rate" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-4">
                     <label class="form-label">Logistics USD/kg</label>
                     <input v-model="settingsForm.logistics_cost_per_kg_usd" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-4">
-                    <label class="form-label">Retail tax</label>
-                    <input v-model="settingsForm.retail_tax_pct" type="number" step="0.0001" min="0" class="form-control" required />
-                    <div class="form-text">Example: 0.08 = 8%</div>
+                    <label class="form-label">Internal logistics, %</label>
+                    <input v-model="settingsForm.internal_logistics_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-4">
-                    <label class="form-label">Acquiring fee</label>
-                    <input v-model="settingsForm.acquiring_pct" type="number" step="0.0001" min="0" class="form-control" required />
+                    <label class="form-label">Retail tax, %</label>
+                    <input v-model="settingsForm.retail_tax_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-4">
-                    <label class="form-label">Packaging fee</label>
-                    <input v-model="settingsForm.packaging_pct" type="number" step="0.0001" min="0" class="form-control" required />
+                    <label class="form-label">Acquiring fee, %</label>
+                    <input v-model="settingsForm.acquiring_pct" type="number" step="0.01" min="0" class="form-control" required />
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Packaging fee, %</label>
+                    <input v-model="settingsForm.packaging_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-6">
-                    <label class="form-label">Margin</label>
-                    <input v-model="settingsForm.margin_pct" type="number" step="0.0001" min="0" class="form-control" required />
+                    <label class="form-label">Margin, %</label>
+                    <input v-model="settingsForm.margin_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
-                  <div class="col-md-6">
-                    <label class="form-label">Discount</label>
-                    <input v-model="settingsForm.discount_pct" type="number" step="0.0001" min="0" class="form-control" required />
+                  <div class="col-12">
+                    <hr class="my-2" />
+                    <h6 class="mb-0">Directories</h6>
+                  </div>
+                  <div
+                    v-for="directory in settingsDirectories"
+                    :key="directory.type"
+                    class="col-md-6"
+                  >
+                    <div class="directory-box">
+                      <label class="form-label">{{ directory.label }}</label>
+                      <div class="input-group directory-input-group mb-2">
+                        <select
+                          :value="directory.selectedId"
+                          class="form-select"
+                          @change="selectSettingsDirectory(directory.type, $event.target.value)"
+                        >
+                          <option disabled value="">Select...</option>
+                          <option v-for="item in directory.items" :key="item.id" :value="item.id">
+                            {{ item.name }}
+                          </option>
+                        </select>
+                        <button
+                          type="button"
+                          class="btn btn-outline-danger directory-delete"
+                          :disabled="!selectedSettingsDirectoryItem(directory.type) || isDeletingReference === `${directory.type}-${directory.selectedId}`"
+                          @click="deleteSettingsReference(directory.type, selectedSettingsDirectoryItem(directory.type))"
+                          title="Delete selected item"
+                        >
+                          x
+                        </button>
+                      </div>
+                      <div class="directory-edit-grid">
+                        <input
+                          v-model.trim="settingsDirectoryForms[directory.type].name"
+                          type="text"
+                          class="form-control form-control-sm"
+                          placeholder="Name"
+                        />
+                        <input
+                          v-if="directory.hasColor"
+                          v-model="settingsDirectoryForms[directory.type].color"
+                          type="color"
+                          class="form-control form-control-color form-control-sm"
+                          title="Color"
+                        />
+                        <input
+                          v-if="directory.hasMargin"
+                          v-model="settingsDirectoryForms[directory.type].margin_pct"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          class="form-control form-control-sm"
+                          placeholder="Margin, %"
+                        />
+                      </div>
+                      <div class="d-flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          class="btn btn-outline-secondary btn-sm flex-fill"
+                          :disabled="!settingsDirectoryForms[directory.type].name"
+                          @click="createSettingsDirectory(directory.type)"
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-outline-primary btn-sm flex-fill"
+                          :disabled="!selectedSettingsDirectoryItem(directory.type) || !settingsDirectoryForms[directory.type].name"
+                          @click="updateSettingsDirectory(directory.type)"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -462,14 +642,15 @@
     </div>
     <div
         class="modal-backdrop fade"
-        :class="{ show: showInviteModal || showSettingsModal }"
-        v-if="showInviteModal || showSettingsModal"
+        :class="{ show: showInviteModal || showSettingsModal || isEditing }"
+        v-if="showInviteModal || showSettingsModal || isEditing"
     ></div>
   </div>
 </template>
 
 <script>
 import axios, { clearClientSession } from '../axios';
+import { clearCacheByPrefix } from '../utils/pageCache';
 
 const API_ORIGIN = 'http://localhost:8000';
 
@@ -497,16 +678,31 @@ export default {
       employees: [],
       accessRoles: [],
       departments: [],
+      countries: [],
+      settingsCountrySearch: '',
+      showSettingsCountrySuggestions: false,
+      highlightedSettingsCountryIndex: 0,
       settingsForm: {
+        business_country: '',
+        company_currency_code: '',
+        company_currency_symbol: '',
         cny_to_local_rate: '',
         usd_to_local_rate: '',
         logistics_cost_per_kg_usd: '',
+        internal_logistics_pct: '',
         retail_tax_pct: '',
         acquiring_pct: '',
         packaging_pct: '',
         margin_pct: '',
-        discount_pct: '',
+        settings_confirmed_at: '',
+        company_logo_url: '',
+        company_work_email: '',
+        company_phone: '',
+        company_address: '',
+        company_bank_details: '',
       },
+      companyLogoFile: null,
+      companyLogoPreview: null,
       invitationSuccess: '',
       invitationError: '',
       inviteModalTab: 'invite',
@@ -514,6 +710,23 @@ export default {
       selectedEmployee: null,
       settingsSuccess: '',
       settingsError: '',
+      settingsCategories: [],
+      settingsUnits: [],
+      settingsCounterpartyStatuses: [],
+      settingsCustomerOrderStatuses: [],
+      settingsSupplierOrderStatuses: [],
+      selectedSettingsCategoryId: '',
+      selectedSettingsUnitId: '',
+      selectedSettingsCounterpartyStatusId: '',
+      selectedSettingsCustomerOrderStatusId: '',
+      selectedSettingsSupplierOrderStatusId: '',
+      settingsDirectoryForms: {
+        category: { name: '', margin_pct: '' },
+        unit: { name: '' },
+        counterpartyStatus: { name: '', color: '#6c757d' },
+        customerOrderStatus: { name: '', color: '#0d6efd' },
+        supplierOrderStatus: { name: '', color: '#0d6efd' },
+      },
       showInviteModal: false,
       showSettingsModal: false,
       isEditing: false,
@@ -525,6 +738,7 @@ export default {
       isDismissingEmployee: null,
       isLoadingSettings: false,
       isSavingSettings: false,
+      isDeletingReference: null,
       isSwitchingCompany: false,
     };
   },
@@ -556,8 +770,6 @@ export default {
       return [
         { key: 'first_name', label: 'First name', value: this.profile.first_name },
         { key: 'last_name', label: 'Last name', value: this.profile.last_name },
-        { key: 'middle_name', label: 'Middle name', value: this.profile.middle_name },
-        { key: 'email', label: 'Account email', value: this.profile.email },
         { key: 'work_email', label: 'Work email', value: this.profile.work_email },
         { key: 'personal_email', label: 'Personal email', value: this.profile.personal_email },
         { key: 'phone', label: 'Mobile phone', value: this.profile.phone },
@@ -565,16 +777,77 @@ export default {
         { key: 'position', label: 'Position', value: this.profile.position },
         { key: 'birth_date', label: 'Birth date', value: this.formatDate(this.profile.birth_date) },
         { key: 'hire_date', label: 'Hire date', value: this.formatDate(this.profile.hire_date) },
-        { key: 'notification_language', label: 'Notification language', value: this.languageLabel(this.profile.notification_language) },
-        { key: 'role', label: 'System role', value: this.roleLabel },
       ];
     },
     companyMemberships() {
       return this.profile.memberships || [];
     },
+    filteredSettingsCountries() {
+      const query = this.settingsCountrySearch.trim().toLowerCase();
+      return query
+        ? this.countries.filter(country =>
+          country.name.toLowerCase().includes(query) ||
+          country.code.toLowerCase().includes(query)
+        )
+        : this.countries;
+    },
+    selectedSettingsCategory() {
+      return this.settingsCategories.find(category => Number(category.id) === Number(this.selectedSettingsCategoryId)) || null;
+    },
+    selectedSettingsUnit() {
+      return this.settingsUnits.find(unit => Number(unit.id) === Number(this.selectedSettingsUnitId)) || null;
+    },
+    settingsDirectories() {
+      return [
+        {
+          type: 'category',
+          label: 'Categories',
+          items: this.settingsCategories,
+          selectedId: this.selectedSettingsCategoryId,
+          hasMargin: true,
+        },
+        {
+          type: 'unit',
+          label: 'Units',
+          items: this.settingsUnits,
+          selectedId: this.selectedSettingsUnitId,
+        },
+        {
+          type: 'counterpartyStatus',
+          label: 'Counterparty statuses',
+          items: this.settingsCounterpartyStatuses,
+          selectedId: this.selectedSettingsCounterpartyStatusId,
+          hasColor: true,
+        },
+        {
+          type: 'customerOrderStatus',
+          label: 'Customer order statuses',
+          items: this.settingsCustomerOrderStatuses,
+          selectedId: this.selectedSettingsCustomerOrderStatusId,
+          hasColor: true,
+        },
+        {
+          type: 'supplierOrderStatus',
+          label: 'Supplier order statuses',
+          items: this.settingsSupplierOrderStatuses,
+          selectedId: this.selectedSettingsSupplierOrderStatusId,
+          hasColor: true,
+        },
+      ];
+    },
   },
   created() {
     this.fetchProfile();
+  },
+  watch: {
+    '$route.query.settings': {
+      immediate: true,
+      async handler(value) {
+        if (value === 'company') {
+          await this.openSettingsModal();
+        }
+      },
+    },
   },
   methods: {
     async fetchProfile() {
@@ -668,50 +941,311 @@ export default {
       this.showSettingsModal = true;
       this.settingsSuccess = '';
       this.settingsError = '';
-      await this.fetchCompanySettings();
+      await this.fetchCountries();
+      await Promise.all([
+        this.fetchCompanySettings(),
+        this.fetchSettingsDirectories(),
+      ]);
     },
     closeSettingsModal() {
       if (this.isSavingSettings) return;
       this.showSettingsModal = false;
+      this.companyLogoFile = null;
+      if (this.companyLogoPreview) {
+        URL.revokeObjectURL(this.companyLogoPreview);
+        this.companyLogoPreview = null;
+      }
     },
     async fetchCompanySettings() {
       this.isLoadingSettings = true;
       this.settingsError = '';
       try {
         const { data } = await axios.get('/api/settings/');
+        const settings = data[0] || {};
         this.settingsForm = {
           ...this.settingsForm,
-          ...(data[0] || {}),
+          ...this.settingsToForm(settings),
+          business_country: settings.company_business_country || settings.business_country || '',
         };
+        this.settingsCountrySearch = settings.company_business_country_name || this.countryNameByCode(this.settingsForm.business_country);
       } catch (error) {
         this.settingsError = this.formatError(error.response?.data) || 'Unable to load company settings.';
       } finally {
         this.isLoadingSettings = false;
       }
     },
+    async fetchSettingsCategories() {
+      await this.fetchSettingsDirectory('category');
+    },
+    async fetchSettingsUnits() {
+      await this.fetchSettingsDirectory('unit');
+    },
+    async fetchSettingsDirectories() {
+      await Promise.all([
+        this.fetchSettingsDirectory('category'),
+        this.fetchSettingsDirectory('unit'),
+        this.fetchSettingsDirectory('counterpartyStatus'),
+        this.fetchSettingsDirectory('customerOrderStatus'),
+        this.fetchSettingsDirectory('supplierOrderStatus'),
+      ]);
+    },
+    directoryConfig(type) {
+      const configs = {
+        category: {
+          url: '/api/product-category/',
+          listKey: 'settingsCategories',
+          selectedKey: 'selectedSettingsCategoryId',
+          cachePrefix: 'product-categories',
+          label: 'Category',
+        },
+        unit: {
+          url: '/api/units/',
+          listKey: 'settingsUnits',
+          selectedKey: 'selectedSettingsUnitId',
+          cachePrefix: 'product-units',
+          label: 'Unit',
+        },
+        counterpartyStatus: {
+          url: '/api/counterparty-statuses/',
+          listKey: 'settingsCounterpartyStatuses',
+          selectedKey: 'selectedSettingsCounterpartyStatusId',
+          label: 'Counterparty status',
+        },
+        customerOrderStatus: {
+          url: '/api/customer-order-statuses/',
+          listKey: 'settingsCustomerOrderStatuses',
+          selectedKey: 'selectedSettingsCustomerOrderStatusId',
+          label: 'Customer order status',
+        },
+        supplierOrderStatus: {
+          url: '/api/supplier-order-statuses/',
+          listKey: 'settingsSupplierOrderStatuses',
+          selectedKey: 'selectedSettingsSupplierOrderStatusId',
+          label: 'Supplier order status',
+        },
+      };
+      return configs[type];
+    },
+    async fetchSettingsDirectory(type) {
+      const config = this.directoryConfig(type);
+      try {
+        const { data } = await axios.get(config.url);
+        this[config.listKey] = data;
+        this[config.selectedKey] = data[0]?.id || '';
+        this.fillSettingsDirectoryForm(type, data[0] || null);
+      } catch (error) {
+        this.settingsError = this.formatError(error.response?.data) || `Unable to load ${config.label.toLowerCase()} list.`;
+      }
+    },
+    selectedSettingsDirectoryItem(type) {
+      const config = this.directoryConfig(type);
+      const selectedId = this[config.selectedKey];
+      return this[config.listKey].find(item => Number(item.id) === Number(selectedId)) || null;
+    },
+    selectSettingsDirectory(type, id) {
+      const config = this.directoryConfig(type);
+      this[config.selectedKey] = id;
+      this.fillSettingsDirectoryForm(type, this.selectedSettingsDirectoryItem(type));
+    },
+    fillSettingsDirectoryForm(type, item) {
+      if (!item) {
+        this.settingsDirectoryForms[type] = {
+          ...this.settingsDirectoryForms[type],
+          name: '',
+          margin_pct: type === 'category' ? '' : this.settingsDirectoryForms[type].margin_pct,
+        };
+        return;
+      }
+      if (type === 'category') {
+        this.settingsDirectoryForms.category = {
+          name: item.name || '',
+          margin_pct: item.margin_pct == null ? '' : this.rateToPercent(item.margin_pct),
+        };
+      } else if (type === 'unit') {
+        this.settingsDirectoryForms.unit = { name: item.name || '' };
+      } else {
+        this.settingsDirectoryForms[type] = {
+          name: item.name || '',
+          color: item.color || '#0d6efd',
+        };
+      }
+    },
+    directoryPayload(type) {
+      const form = this.settingsDirectoryForms[type];
+      const payload = { name: form.name };
+      if (type === 'category') {
+        payload.margin_pct = form.margin_pct === '' ? null : this.percentToRate(form.margin_pct);
+      }
+      if (type.endsWith('Status')) {
+        payload.color = form.color || '#0d6efd';
+      }
+      return payload;
+    },
+    async createSettingsDirectory(type) {
+      const config = this.directoryConfig(type);
+      this.settingsSuccess = '';
+      this.settingsError = '';
+      try {
+        const { data } = await axios.post(config.url, this.directoryPayload(type));
+        this[config.listKey].push(data);
+        this[config.selectedKey] = data.id;
+        this.fillSettingsDirectoryForm(type, data);
+        if (config.cachePrefix) clearCacheByPrefix(config.cachePrefix);
+        this.settingsSuccess = `${config.label} has been added.`;
+      } catch (error) {
+        this.settingsError = this.formatError(error.response?.data) || `Unable to add ${config.label.toLowerCase()}.`;
+      }
+    },
+    async updateSettingsDirectory(type) {
+      const config = this.directoryConfig(type);
+      const item = this.selectedSettingsDirectoryItem(type);
+      if (!item) return;
+      this.settingsSuccess = '';
+      this.settingsError = '';
+      try {
+        const { data } = await axios.patch(`${config.url}${item.id}/`, this.directoryPayload(type));
+        const idx = this[config.listKey].findIndex(entry => entry.id === data.id);
+        if (idx !== -1) this[config.listKey].splice(idx, 1, data);
+        this.fillSettingsDirectoryForm(type, data);
+        if (config.cachePrefix) clearCacheByPrefix(config.cachePrefix);
+        this.settingsSuccess = `${config.label} has been saved.`;
+      } catch (error) {
+        this.settingsError = this.formatError(error.response?.data) || `Unable to save ${config.label.toLowerCase()}.`;
+      }
+    },
+    async deleteSettingsReference(type, item) {
+      const config = this.directoryConfig(type);
+      const label = config.label.toLowerCase();
+      if (!confirm(`Delete ${label} "${item.name}"?`)) return;
+
+      this.isDeletingReference = `${type}-${item.id}`;
+      this.settingsSuccess = '';
+      this.settingsError = '';
+      try {
+        await axios.delete(`${config.url}${item.id}/`);
+        this[config.listKey] = this[config.listKey].filter(entry => entry.id !== item.id);
+        this[config.selectedKey] = this[config.listKey][0]?.id || '';
+        this.fillSettingsDirectoryForm(type, this[config.listKey][0] || null);
+        if (config.cachePrefix) clearCacheByPrefix(config.cachePrefix);
+        this.settingsSuccess = `${config.label} has been deleted.`;
+      } catch (error) {
+        this.settingsError = this.formatError(error.response?.data) || `Unable to delete ${label}.`;
+      } finally {
+        this.isDeletingReference = null;
+      }
+    },
     async saveCompanySettings() {
       this.isSavingSettings = true;
       this.settingsSuccess = '';
       this.settingsError = '';
+      if (!this.settingsForm.business_country) {
+        this.settingsError = 'Please select a country from the list.';
+        this.isSavingSettings = false;
+        return;
+      }
       try {
-        const payload = {
-          cny_to_local_rate: this.settingsForm.cny_to_local_rate,
-          usd_to_local_rate: this.settingsForm.usd_to_local_rate,
-          logistics_cost_per_kg_usd: this.settingsForm.logistics_cost_per_kg_usd,
-          retail_tax_pct: this.settingsForm.retail_tax_pct,
-          acquiring_pct: this.settingsForm.acquiring_pct,
-          packaging_pct: this.settingsForm.packaging_pct,
-          margin_pct: this.settingsForm.margin_pct,
-          discount_pct: this.settingsForm.discount_pct,
+        const payload = new FormData();
+        payload.append('business_country', this.settingsForm.business_country);
+        payload.append('cny_to_local_rate', this.settingsForm.cny_to_local_rate);
+        payload.append('usd_to_local_rate', this.settingsForm.usd_to_local_rate);
+        payload.append('logistics_cost_per_kg_usd', this.settingsForm.logistics_cost_per_kg_usd);
+        payload.append('internal_logistics_pct', this.percentToRate(this.settingsForm.internal_logistics_pct));
+        payload.append('retail_tax_pct', this.percentToRate(this.settingsForm.retail_tax_pct));
+        payload.append('acquiring_pct', this.percentToRate(this.settingsForm.acquiring_pct));
+        payload.append('packaging_pct', this.percentToRate(this.settingsForm.packaging_pct));
+        payload.append('margin_pct', this.percentToRate(this.settingsForm.margin_pct));
+        payload.append('company_work_email', this.settingsForm.company_work_email || '');
+        payload.append('company_phone', this.settingsForm.company_phone || '');
+        payload.append('company_address', this.settingsForm.company_address || '');
+        payload.append('company_bank_details', this.settingsForm.company_bank_details || '');
+        if (this.companyLogoFile) {
+          payload.append('company_logo', this.companyLogoFile);
+        }
+        const { data } = await axios.post('/api/settings/', payload, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        this.settingsForm = {
+          ...this.settingsForm,
+          ...this.settingsToForm(data),
+          business_country: data.company_business_country || this.settingsForm.business_country,
         };
-        const { data } = await axios.post('/api/settings/', payload);
-        this.settingsForm = { ...this.settingsForm, ...data };
+        this.companyLogoFile = null;
+        if (this.companyLogoPreview) {
+          URL.revokeObjectURL(this.companyLogoPreview);
+          this.companyLogoPreview = null;
+        }
+        this.settingsCountrySearch = data.company_business_country_name || this.countryNameByCode(this.settingsForm.business_country);
+        this.showSettingsCountrySuggestions = false;
         this.settingsSuccess = 'Company settings have been saved.';
+        await this.fetchProfile();
       } catch (error) {
         this.settingsError = this.formatError(error.response?.data) || 'Unable to save company settings.';
       } finally {
         this.isSavingSettings = false;
       }
+    },
+    async fetchCountries() {
+      if (this.countries.length) return;
+      try {
+        const { data } = await axios.get('/api/auth/business-countries/');
+        this.countries = data;
+      } catch {
+        this.countries = [];
+      }
+    },
+    countryNameByCode(code) {
+      return this.countries.find(country => country.code === code)?.name || '';
+    },
+    percentToRate(value) {
+      const numberValue = Number(String(value || '0').replace(',', '.'));
+      return (numberValue / 100).toFixed(4);
+    },
+    rateToPercent(value) {
+      const numberValue = Number(String(value || '0').replace(',', '.'));
+      return Number((numberValue * 100).toFixed(2));
+    },
+    settingsToForm(settings) {
+      return {
+        ...settings,
+        internal_logistics_pct: this.rateToPercent(settings.internal_logistics_pct),
+        retail_tax_pct: this.rateToPercent(settings.retail_tax_pct),
+        acquiring_pct: this.rateToPercent(settings.acquiring_pct),
+        packaging_pct: this.rateToPercent(settings.packaging_pct),
+        margin_pct: this.rateToPercent(settings.margin_pct),
+      };
+    },
+    handleCompanyLogoChange(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      this.companyLogoFile = file;
+      if (this.companyLogoPreview) URL.revokeObjectURL(this.companyLogoPreview);
+      this.companyLogoPreview = URL.createObjectURL(file);
+    },
+    onSettingsCountrySearchInput() {
+      this.settingsForm.business_country = '';
+      this.highlightedSettingsCountryIndex = 0;
+      this.showSettingsCountrySuggestions = true;
+    },
+    selectSettingsCountry(country) {
+      this.settingsForm.business_country = country.code;
+      this.settingsCountrySearch = country.name;
+      this.showSettingsCountrySuggestions = false;
+    },
+    moveSettingsCountryHighlight(direction) {
+      if (!this.filteredSettingsCountries.length) return;
+      const max = this.filteredSettingsCountries.length - 1;
+      this.highlightedSettingsCountryIndex += direction;
+      if (this.highlightedSettingsCountryIndex < 0) this.highlightedSettingsCountryIndex = max;
+      if (this.highlightedSettingsCountryIndex > max) this.highlightedSettingsCountryIndex = 0;
+    },
+    selectHighlightedSettingsCountry() {
+      const country = this.filteredSettingsCountries[this.highlightedSettingsCountryIndex];
+      if (country) this.selectSettingsCountry(country);
+    },
+    hideSettingsCountrySuggestions() {
+      setTimeout(() => {
+        this.showSettingsCountrySuggestions = false;
+      }, 120);
     },
     async sendInvitation() {
       this.isSendingInvitation = true;
@@ -750,6 +1284,7 @@ export default {
       this.isSwitchingCompany = true;
       try {
         const { data } = await axios.post('/api/auth/switch-company/', { company_id: nextCompanyId });
+        this.clearCompanyScopedCache();
         this.profile = data;
         this.form = { ...data };
         this.syncProfileForNav(data);
@@ -766,6 +1301,20 @@ export default {
       } finally {
         this.isSwitchingCompany = false;
       }
+    },
+    clearCompanyScopedCache() {
+      [
+        'customer-order-statuses',
+        'supplier-order-statuses',
+        'counterparty-statuses',
+        'counterparty-options',
+        'customer-orders:',
+        'supplier-orders:',
+        'counterparties:',
+        'products:',
+        'product-categories',
+        'product-units',
+      ].forEach(prefix => clearCacheByPrefix(prefix));
     },
     startEditing() {
       this.form = { ...this.profile };
@@ -931,6 +1480,9 @@ export default {
     formatDate(value) {
       return value ? new Date(value).toLocaleDateString() : '';
     },
+    formatDateTime(value) {
+      return value ? new Date(value).toLocaleString() : 'not updated yet';
+    },
     employeeName(employee) {
       const fullName = [employee.first_name, employee.last_name].filter(Boolean).join(' ');
       return fullName || employee.username || employee.email;
@@ -1091,7 +1643,7 @@ export default {
 }
 
 .profile-section {
-  padding: 1.5rem;
+  padding: 1.15rem 1.25rem 1.25rem;
 }
 
 .section-title {
@@ -1110,13 +1662,13 @@ export default {
 
 .profile-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
 }
 
 .profile-field {
   min-width: 0;
-  padding: 0.85rem 1rem;
+  padding: 0.65rem 0.8rem;
   background: #f8f9fa;
   border: 1px solid #edf0f2;
   border-radius: 0.375rem;
@@ -1124,14 +1676,14 @@ export default {
 
 .field-label {
   color: #adb5bd;
-  font-size: 0.9rem;
+  font-size: 0.78rem;
 }
 
 .field-value {
-  margin-top: 0.2rem;
+  margin-top: 0.12rem;
   overflow-wrap: anywhere;
   color: #495057;
-  font-size: 1rem;
+  font-size: 0.92rem;
   font-weight: 500;
 }
 
@@ -1141,10 +1693,34 @@ export default {
 }
 
 .profile-form {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.profile-edit-layout {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: stretch;
   padding: 1rem;
   background: #f8f9fa;
   border: 1px solid #edf0f2;
   border-radius: 0.5rem;
+}
+
+.profile-edit-photo {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.65rem;
+  min-height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .invitation-list {
@@ -1233,12 +1809,91 @@ export default {
   background: #fff;
 }
 
+.profile-modal .modal-body {
+  padding: 1rem 1.25rem;
+}
+
 .invite-modal .invitation-item,
 .invite-modal .employee-item {
   background: #f8f9fa;
 }
 
+.country-picker {
+  position: relative;
+}
+
+.country-suggestions {
+  left: 0.75rem;
+  max-height: 240px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0.75rem;
+  top: 74px;
+  z-index: 1060;
+}
+
+.country-suggestions .list-group-item {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.directory-box {
+  padding: 0.85rem;
+  background: #f8f9fa;
+  border: 1px solid #edf0f2;
+  border-radius: 0.375rem;
+}
+
+.directory-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 42px;
+  padding: 0;
+  line-height: 1;
+}
+
+.directory-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.directory-edit-grid input[type="number"] {
+  grid-column: 1 / -1;
+}
+
+.directory-edit-grid .form-control-color {
+  width: 42px;
+  min-width: 42px;
+  padding: 0.2rem;
+}
+
+.company-logo-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 140px;
+  height: 70px;
+  padding: 0.4rem;
+  border: 1px solid #edf0f2;
+  border-radius: 0.375rem;
+  background: #f8f9fa;
+}
+
+.company-logo-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 @media (max-width: 576px) {
+  .profile-edit-layout {
+    grid-template-columns: 1fr;
+  }
+
   .employee-item {
     align-items: flex-start;
     flex-direction: column;

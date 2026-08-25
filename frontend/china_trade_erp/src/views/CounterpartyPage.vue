@@ -1,5 +1,11 @@
 <template>
   <div class="container mt-4">
+    <transition name="save-toast">
+      <div v-if="saveToast" class="save-toast">
+        {{ saveToast }}
+      </div>
+    </transition>
+
     <h1 class="mb-4">Counterparties</h1>
 
     <!-- Search & Filters -->
@@ -28,10 +34,13 @@
         </select>
       </div>
       <div class="col-md-2">
-        <select v-model="filters.status" class="form-select" @change="onFiltersChanged">
-          <option disabled selected hidden value="">Select status...</option>
-          <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
+        <StatusSelect
+            v-model="filters.status"
+            :statuses="statuses"
+            placeholder="Select status..."
+            clearable
+            @change="onFiltersChanged"
+        />
       </div>
       <div class="col-md-2 d-flex align-items-end">
         <button class="btn btn-secondary w-100" @click="resetFilters">Reset</button>
@@ -45,10 +54,10 @@
 
     <!-- Table -->
     <div class="table-responsive">
-      <table class="table table-hover table-bordered align-middle">
+      <table class="table table-hover table-bordered align-middle counterparties-table">
         <thead class="table-light">
         <tr>
-          <th>Name</th>
+          <th class="counterparty-name-col">Name</th>
           <th>Region</th>
           <th>Roles</th>
           <th class="d-none d-md-table-cell">Phone</th>
@@ -57,7 +66,7 @@
           <th>Code</th>
           <th class="d-none d-md-table-cell">Address</th>
           <th>Status</th>
-          <th>Actions</th>
+          <th class="actions-col">Actions</th>
         </tr>
         </thead>
         <tbody>
@@ -93,16 +102,18 @@
               </span>
             <span v-else class="text-muted">—</span>
           </td>
-          <td @click.stop>
-            <button
-                v-if="item.qr_code_image"
-                class="btn btn-sm btn-secondary me-1"
-                @click="showQr(item.qr_code_image)"
-            >QR
-            </button>
-            <button class="btn btn-sm btn-danger" @click="deleteCounterparty(item.id)">
-              Delete
-            </button>
+          <td class="actions-cell" @click.stop>
+            <div class="actions-group">
+              <button
+                  v-if="item.qr_code_image"
+                  class="btn btn-sm btn-secondary"
+                  @click="showQr(item.qr_code_image)"
+              >QR
+              </button>
+              <button class="btn btn-sm btn-danger" @click="deleteCounterparty(item.id)">
+                Delete
+              </button>
+            </div>
           </td>
         </tr>
         <tr v-if="isLoading">
@@ -214,10 +225,7 @@
                   </div>
                   <div class="col-md-6">
                     <label class="form-label">Status</label>
-                    <select v-model="counterpartyForm.status_id" class="form-select">
-                      <option disabled value="">Select status...</option>
-                      <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
-                    </select>
+                    <StatusSelect v-model="counterpartyForm.status_id" :statuses="statuses" />
                   </div>
                   <div class="col-md-6">
                     <label class="form-label">Phone</label>
@@ -238,8 +246,13 @@
                   <div class="col-12">
                     <label class="form-label">QR Code Image</label>
                     <input type="file" class="form-control" @change="handleQrUpload"/>
-                    <div v-if="qrPreview" class="mt-2 text-center">
-                      <img :src="qrPreview" class="img-fluid"/>
+                    <div
+                        v-if="qrPreview"
+                        class="qr-preview-box mt-2"
+                        title="Open QR"
+                        @click="showQr(qrPreview)"
+                    >
+                      <img :src="qrPreview" class="qr-preview-image" alt="QR preview"/>
                     </div>
                   </div>
                 </div>
@@ -307,12 +320,12 @@
 
     <!-- QR Preview Modal -->
     <div
-        class="modal fade"
+        class="modal fade qr-modal"
         :class="{ show: !!qrModalUrl }"
         :style="qrModalUrl ? 'display: block;' : ''"
         tabindex="-1"
     >
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered qr-dialog">
         <transition name="modal-fade">
           <div class="modal-content" v-if="showQrContent && qrModalUrl">
             <div class="modal-header">
@@ -320,13 +333,15 @@
               <button type="button" class="btn-close" @click="qrModalUrl = null"></button>
             </div>
             <div class="modal-body text-center">
-              <img :src="qrModalUrl" class="img-fluid" style="max-height: 80vh;" alt="QR code"/>
+              <div class="qr-modal-frame">
+                <img :src="qrModalUrl" class="qr-modal-image" alt="QR code"/>
+              </div>
             </div>
           </div>
         </transition>
       </div>
     </div>
-    <div class="modal-backdrop fade" :class="{ show: !!qrModalUrl }"></div>
+    <div class="modal-backdrop fade qr-backdrop" :class="{ show: !!qrModalUrl }"></div>
   </div>
 </template>
 
@@ -334,12 +349,14 @@
 import axios from '../axios';
 import debounce from 'lodash/debounce';
 import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+import StatusSelect from '../components/StatusSelect.vue';
 
 const TABLE_STATE_KEY = 'counterparties-table-state';
 const PAGE_SIZE = 50;
 
 export default {
   name: 'CounterpartyView',
+  components: { StatusSelect },
   data() {
     return {
       showEditContent: true,
@@ -354,6 +371,8 @@ export default {
       qrModalUrl: null,
       historyLogs: [],
       showHistoryModal: false,
+      saveToast: '',
+      saveToastTimer: null,
       searchQuery: '',
       filters: {type: '', role: '', status: ''},
       page: 1,
@@ -531,22 +550,45 @@ export default {
         } else {
           res = await axios.post('/api/counterparties/', formData, cfg);
           this.counterparties.unshift(res.data);
+          this.isEdit = true;
+          this.selectedId = res.data.id;
         }
+        this.counterpartyForm = {
+          ...this.defaultForm,
+          ...res.data,
+          status_id: res.data.status?.id || null,
+          qr_code_image: null
+        };
+        this.qrPreview = res.data.qr_code_image || null;
         clearCacheByPrefix('counterparties:');
         clearCacheByPrefix('counterparty-options');
-        this.closeModal();
+        clearCacheByPrefix('supplier-orders:');
+        clearCacheByPrefix('customer-orders:');
         this.fetchCounterparties();
+        this.showSaveToast('Counterparty saved');
       } catch (err) {
         console.error('Save error:', err.response?.data || err);
       }
     },
+    showSaveToast(message) {
+      this.saveToast = message;
+      clearTimeout(this.saveToastTimer);
+      this.saveToastTimer = setTimeout(() => {
+        this.saveToast = '';
+      }, 1800);
+    },
     async deleteCounterparty(id) {
       if (confirm('Delete this counterparty?')) {
-        await axios.delete(`/api/counterparties/${id}/`);
-        clearCacheByPrefix('counterparties:');
-        clearCacheByPrefix('counterparty-options');
-        this.counterparties = this.counterparties.filter(x => x.id !== id);
-        this.totalCount = Math.max(0, this.totalCount - 1);
+        try {
+          await axios.delete(`/api/counterparties/${id}/`);
+          clearCacheByPrefix('counterparties:');
+          clearCacheByPrefix('counterparty-options');
+          this.counterparties = this.counterparties.filter(x => x.id !== id);
+          this.totalCount = Math.max(0, this.totalCount - 1);
+        } catch (error) {
+          const detail = error.response?.data?.detail || 'Unable to delete counterparty.';
+          alert(detail);
+        }
       }
     },
     showQr(url) {
@@ -642,5 +684,123 @@ export default {
 .history-modal-body {
   max-height: calc(100vh - 220px);
   overflow-y: auto;
+}
+
+.counterparties-table th,
+.counterparties-table td {
+  padding: 0.55rem 0.6rem;
+}
+
+.counterparties-table .badge {
+  font-weight: 600;
+}
+
+.counterparty-name-col {
+  min-width: 180px;
+}
+
+.actions-col {
+  min-width: 145px;
+}
+
+.actions-cell {
+  min-width: 145px;
+}
+
+.actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.actions-group .btn {
+  white-space: nowrap;
+}
+
+.qr-preview-box,
+.qr-modal-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: auto;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qr-preview-box {
+  width: 220px;
+  height: 220px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.qr-preview-box:hover {
+  border-color: #7f95a8;
+  box-shadow: 0 8px 22px rgba(47, 63, 80, 0.12);
+  transform: translateY(-1px);
+}
+
+.qr-modal {
+  z-index: 1090;
+}
+
+.qr-backdrop {
+  z-index: 1085;
+}
+
+.qr-dialog {
+  width: min(440px, calc(100vw - 1rem));
+  max-width: min(440px, calc(100vw - 1rem));
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.qr-dialog .modal-body {
+  padding: 1rem;
+}
+
+.qr-preview-image,
+.qr-modal-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.qr-modal-frame {
+  width: min(360px, calc(100vw - 4rem));
+  height: min(360px, calc(100vw - 4rem));
+  padding: 14px;
+}
+
+.save-toast {
+  position: fixed;
+  top: 82px;
+  left: 50%;
+  z-index: 1080;
+  min-width: 180px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid #badbcc;
+  border-radius: 0.375rem;
+  background: #d1e7dd;
+  color: #0f5132;
+  box-shadow: 0 8px 22px rgba(15, 81, 50, 0.16);
+  font-weight: 600;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.save-toast-enter-active,
+.save-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.save-toast-enter-from,
+.save-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
 }
 </style>

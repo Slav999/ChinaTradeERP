@@ -35,7 +35,7 @@ class ChangeLogHistoryMixin:
     @action(detail=True, methods=['get'], url_path='history')
     def history(self, request, pk=None):
         instance = self.get_object()
-        logs = instance.history.all()
+        logs = instance.history.all().order_by('-changed_at', '-id')
         serializer_class = self.get_serializer_class()
         serializer = serializer_class(logs, many=True)
         return Response(serializer.data)

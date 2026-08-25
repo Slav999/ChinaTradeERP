@@ -17,6 +17,12 @@
         <button class="btn btn-secondary" @click="goBack">← Back to Orders</button>
       </div>
     </div>
+    <transition name="save-toast">
+      <div v-if="saveToast" class="save-toast">
+        {{ saveToast }}
+      </div>
+    </transition>
+
 
     <!-- Табы -->
     <ul class="nav nav-tabs mb-3">
@@ -85,7 +91,7 @@
 
         <!-- ▼ ФОРМА ЗАКАЗА (полностью из исходного файла) ▼ -->
         <form @submit.prevent="saveOrder">
-          <div class="row gx-2 gy-2">
+          <div class="row gx-2 gy-2 order-form-grid">
             <div class="row gx-2 gy-2">
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Order Number</label>
@@ -93,10 +99,7 @@
               </div>
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Status</label>
-                <select v-model="orderForm.status_id" class="form-select form-select-sm">
-                  <option disabled value="">Select status...</option>
-                  <option v-for="s in statuses" :key="s.id" :value="s.id">{{ s.name }}</option>
-                </select>
+                <StatusSelect v-model="orderForm.status_id" :statuses="statuses" size="sm" />
               </div>
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Supplier</label>
@@ -124,13 +127,17 @@
                 <label class="form-label small">Delivery</label>
                 <input v-model="orderForm.delivery_date" type="date" class="form-control form-control-sm"/>
               </div>
-              <div class="col-12">
+              <div class="col-12 compact-text-field">
                 <label class="form-label small">Shipping Address</label>
                 <textarea v-model="orderForm.shipping_address" class="form-control form-control-sm" rows="2"></textarea>
               </div>
-              <div class="col-12">
+              <div class="col-12 compact-text-field">
                 <label class="form-label small">Supplier Comment</label>
                 <textarea v-model="orderForm.supplier_comment" class="form-control form-control-sm" rows="2"></textarea>
+              </div>
+              <div class="col-12 compact-text-field">
+                <label class="form-label small">Internal Comment</label>
+                <textarea v-model="orderForm.internal_comment" class="form-control form-control-sm" rows="3"></textarea>
               </div>
               <div class="col-md-4">
                 <label class="form-label small">Amount CNY</label>
@@ -162,13 +169,17 @@
                 <input v-model="orderForm.shipping_code" class="form-control form-control-sm"/>
               </div>
 
-              <div class="col-6">
+              <div class="col-6 payment-qr-col">
                 <label class="form-label small">Payment QR</label>
-                <div v-if="orderForm.payment_details_qr || qrPreview" class="mt-2 text-center">
+                <div
+                    v-if="orderForm.payment_details_qr || qrPreview"
+                    class="qr-preview-box mt-2"
+                    title="Open QR"
+                    @click="showQr(qrPreview || orderForm.payment_details_qr)"
+                >
                   <img
                       :src="qrPreview || orderForm.payment_details_qr"
-                      class="img-fluid"
-                      style="max-height:150px;"
+                      class="qr-preview-image"
                       alt="Payment QR"
                   />
                 </div>
@@ -196,7 +207,7 @@
     </transition>
     <transition>
       <div v-if="activeTab==='files'">
-        <div class="col-12">
+        <div class="compact-files-block">
           <label class="form-label small">Attachments</label>
           <input
               type="file"
@@ -211,7 +222,7 @@
                   target="_blank"
                   class="flex-grow-1 text-truncate"
               >
-                {{ att.file.split('/').pop() }}
+                {{ attachmentName(att) }}
               </a>
               <button
                   class="btn btn-sm btn-outline-danger ms-2"
@@ -227,7 +238,7 @@
     <transition>
       <div v-if="activeTab==='positions'">
         <!-- 1) поиск -->
-        <div class="position-search position-relative mb-3">
+        <div class="position-search position-relative compact-position-search mb-3">
           <input
               v-model="positionSearch"
               @input="fetchProductSuggestions"
@@ -237,20 +248,19 @@
           />
           <ul
               v-if="positionSearch.length >= 1"
-              class="list-group position-absolute w-100"
-              style="z-index:1000"
+              class="list-group position-absolute w-100 product-suggestions-list"
           >
             <li
                 v-for="p in productSuggestions"
                 :key="p.id"
-                class="list-group-item list-group-item-action p-1"
+                class="list-group-item list-group-item-action product-suggestion p-1"
                 @click="addPosition(p)"
             >
               {{ p.name }} ({{ p.sku }}) — {{ p.unit?.name || '—' }}
             </li>
             <li
                 v-if="!productSuggestions.length"
-                class="list-group-item list-group-item-action text-primary p-1"
+                class="list-group-item list-group-item-action product-suggestion text-primary p-1"
                 @click="openProductModalWithName"
             >
               + Создать новый товар: «{{ positionSearch }}»
@@ -259,41 +269,44 @@
         </div>
 
         <!-- 2) существующие позиции -->
-        <table class="table table-sm mb-2">
-          <thead>
-          <tr>
-            <th>Product</th>
-            <th>Unit</th>
-            <th>Qty</th>
-            <th></th>
-          </tr>
-          </thead>
-          <tbody>
-          <tr v-for="item in orderItems" :key="item.id">
-            <td @click="openProductModalForEdit(item.product)"
-                style="cursor:pointer; color:blue;">{{ item.product.name }}
-            </td>
-            <td>{{ item.product.unit?.name || '—' }}</td>
-            <td>
-              <input
-                  type="number"
-                  step="0.01"
-                  class="form-control form-control-sm"
-                  v-model.number="item.quantity"
-                  @change="updatePosition(item)"
-              />
-            </td>
-            <td>
-              <button class="btn btn-sm btn-outline-danger"
-                      @click="removeItem(item.id)">×
-              </button>
-            </td>
-          </tr>
-          <tr v-if="!orderItems.length">
-            <td colspan="4" class="text-center text-muted">No positions yet.</td>
-          </tr>
-          </tbody>
-        </table>
+        <div class="positions-table-wrap">
+          <table class="table table-sm align-middle mb-2 positions-table supplier-positions-table">
+            <thead>
+            <tr>
+              <th class="product-col">Product</th>
+              <th class="qty-col">Qty</th>
+              <th class="unit-col">Unit</th>
+              <th class="money-col text-end">Purchase price</th>
+              <th class="action-col"></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="item in orderItems" :key="item.id">
+              <td class="product-col product-link" @click="openProductModalForEdit(item.product)">{{ item.product.name }}
+              </td>
+              <td class="qty-col">
+                <input
+                    type="number"
+                    step="0.01"
+                    class="form-control form-control-sm qty-input"
+                    v-model.number="item.quantity"
+                    @change="updatePosition(item)"
+                />
+              </td>
+              <td class="unit-col">{{ item.product.unit?.name || '—' }}</td>
+              <td class="money-col text-end">{{ formatPrice(item.product.purchase_price) }}</td>
+              <td class="action-col">
+                <button class="btn btn-sm btn-outline-danger position-remove-btn"
+                        @click="removeItem(item.id)">×
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!orderItems.length">
+              <td colspan="5" class="text-center text-muted">No positions yet.</td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </transition>
 
@@ -354,25 +367,84 @@
         :units="units"
         :suppliers="suppliers"
         @saved="onProductSaved"
+        @reference-created="onReferenceCreated"
+        @open-history="openProductHistory"
         @close="showProductModal = false"
     />
 
-    <!-- ▼ QR-MODAL ▼ -->
-    <div class="modal-dialog modal-dialog-centered modal-lg">
-      <transition name="modal-fade">
-        <div class="modal-content" v-if="showQrContent && qrModalUrl">
-          <div class="modal-header">
-            <h6 class="modal-title">QR Code</h6>
-            <button type="button" class="btn-close" @click="qrModalUrl = null"></button>
+    <div
+        class="modal fade"
+        tabindex="-1"
+        :class="{ show: showProductHistoryModal }"
+        :style="showProductHistoryModal ? 'display: block;' : ''"
+    >
+      <div class="modal-dialog modal-dialog-centered modal-lg">
+        <transition name="modal-fade">
+          <div class="modal-content" v-if="showProductHistoryModal">
+            <div class="modal-header">
+              <h5 class="modal-title">Product Change History</h5>
+              <button type="button" class="btn-close" @click="closeProductHistory"></button>
+            </div>
+            <div class="modal-body history-modal-body">
+              <table v-if="productHistoryLogs.length" class="table table-striped">
+                <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>User</th>
+                  <th>Field</th>
+                  <th>From</th>
+                  <th>To</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr v-for="(log, idx) in productHistoryLogs" :key="idx">
+                  <td>{{ log.changed_at }}</td>
+                  <td>{{ log.changed_by }}</td>
+                  <td>{{ productFieldLabel(log.field_name) }}</td>
+                  <td>{{ formatProductHistoryValue(log.field_name, log.old_value) }}</td>
+                  <td>{{ formatProductHistoryValue(log.field_name, log.new_value) }}</td>
+                </tr>
+                </tbody>
+              </table>
+              <div v-else class="text-center text-muted py-4">
+                No changes found.
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" @click="closeProductHistory">Close</button>
+            </div>
           </div>
-          <div class="modal-body text-center">
-            <img :src="qrModalUrl" class="img-fluid" style="max-height: 80vh;" alt="QR code"/>
-          </div>
-        </div>
-      </transition>
+        </transition>
+      </div>
     </div>
+    <div class="modal-backdrop fade history-backdrop" :class="{ show: showProductHistoryModal }"></div>
+
+    <!-- ▼ QR-MODAL ▼ -->
+    <div
+        class="modal fade qr-modal"
+        :class="{ show: !!qrModalUrl }"
+        :style="qrModalUrl ? 'display: block;' : ''"
+        tabindex="-1"
+    >
+      <div class="modal-dialog modal-dialog-centered qr-dialog">
+        <transition name="modal-fade">
+          <div class="modal-content" v-if="showQrContent && qrModalUrl">
+            <div class="modal-header">
+              <h6 class="modal-title">QR Code</h6>
+              <button type="button" class="btn-close" @click="qrModalUrl = null"></button>
+            </div>
+            <div class="modal-body text-center">
+              <div class="qr-modal-frame">
+                <img :src="qrModalUrl" class="qr-modal-image" alt="QR code"/>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </div>
+    <div class="modal-backdrop fade qr-backdrop" :class="{ show: !!qrModalUrl }"></div>
+    <!-- ▲ QR-MODAL ▲ -->
   </div>
-  <!-- ▲ QR-MODAL ▲ -->
 </template>
 
 
@@ -380,10 +452,11 @@
 import axios from '../axios';
 import ProductAddEditModal from "../components/ProductAddEditModal.vue";
 import RelatedDocumentsTree from "../components/RelatedDocumentsTree.vue";
+import StatusSelect from "../components/StatusSelect.vue";
 
 export default {
   name: 'SupplierOrderDetail',
-  components: {ProductAddEditModal, RelatedDocumentsTree},
+  components: {ProductAddEditModal, RelatedDocumentsTree, StatusSelect},
   data() {
     return {
       isSending: false,
@@ -412,7 +485,7 @@ export default {
         order_number: '', status_id: '', supplier_id: '', customer_id: '',
         planned_receipt_date: '', shipment_date: '', delivery_date: '',
         china_exit_date: '', shipping_address: '', shipping_code: '',
-        supplier_comment: '', amount_cny: '', track_number: '',
+        supplier_comment: '', internal_comment: '', amount_cny: '', track_number: '',
         logistic_invoice_no: '', production_due_date: '',
         payment_date: '', payment_details_qr: null
       },
@@ -420,16 +493,22 @@ export default {
 
       /* UI-состояния */
       isSaving: false,
+      saveToast: '',
+      saveToastTimer: null,
       qrPreview: null,           /* превью только что загруженного QR */
       qrModalUrl: null,
       showQrContent: true,
       historyLogs: [],
       showHistoryModal: false,
       showHistoryContent: false,
+      productHistoryLogs: [],
+      showProductHistoryModal: false,
       showEditContent: true,
 
       /* текущее id */
       selectedId: null,
+      savedSnapshot: '',
+      savedItemIds: [],
     };
   },
 
@@ -442,18 +521,24 @@ export default {
     },
     relatedDocsCount() {
       return this.relatedRoot ? this.relatedDocs.length : 0;
+    },
+    hasUnsavedChanges() {
+      return this.savedSnapshot !== this.currentSnapshot();
     }
   },
 
   created() {
     this.selectedId = this.$route.params.id ? +this.$route.params.id : null;
     this.resetForm();
-    this.fetchAux().then(() => {
+    this.fetchAux().then(async () => {
       if (this.isEdit) {
-        this.fetchOrder();
-        this.fetchOrderItems();
-        this.fetchRelatedDocuments();
+        await Promise.all([
+          this.fetchOrder(),
+          this.fetchOrderItems(),
+          this.fetchRelatedDocuments(),
+        ]);
       }
+      this.updateSavedSnapshot();
     });
   },
 
@@ -462,9 +547,13 @@ export default {
       this.selectedId = val ? +val : null;
       this.resetForm();
       if (this.isEdit) {
-        this.fetchOrder();
-        this.fetchOrderItems();
-        this.fetchRelatedDocuments();
+        Promise.all([
+          this.fetchOrder(),
+          this.fetchOrderItems(),
+          this.fetchRelatedDocuments(),
+        ]).then(() => this.updateSavedSnapshot());
+      } else {
+        this.updateSavedSnapshot();
       }
     }
   },
@@ -475,7 +564,7 @@ export default {
     this.isSending = true;
     try {
       await axios.post(`/api/supplier-order/${this.selectedId}/send/`);
-      alert('Заказ отправлен!');
+      this.showSaveToast('Order sent');
     } catch (e) {
       console.error(e);
       alert('Не удалось отправить заказ.');
@@ -507,38 +596,22 @@ export default {
 
     // 2) добавить позицию
     async addPosition(product) {
-      if (!this.selectedId) {
-        if (!this.orderForm.supplier_id && product.supplier?.id) {
-          this.orderForm.supplier_id = product.supplier.id;
-        }
-        this.orderItems.push({
-          id: `tmp-${Date.now()}-${product.id}`,
-          product,
-          quantity: 1,
-          comment: '',
-        });
-        this.positionSearch = '';
-        this.productSuggestions = [];
-        return;
+      if (!this.orderForm.supplier_id && product.supplier?.id) {
+        this.orderForm.supplier_id = product.supplier.id;
       }
-      await axios.post('/api/supplier-order-items/', {
-        order: this.selectedId,
-        product_id: product.id,
-        quantity: 1
-      })
+      this.orderItems.push({
+        id: `tmp-${Date.now()}-${product.id}`,
+        product,
+        quantity: 1,
+        comment: '',
+      });
       this.positionSearch = ''
       this.productSuggestions = []
-      await this.fetchOrderItems()
     },
 
     // 3) удалить
     async removeItem(itemId) {
-      if (String(itemId).startsWith('tmp-')) {
-        this.orderItems = this.orderItems.filter(item => item.id !== itemId);
-        return;
-      }
-      await axios.delete(`/api/supplier-order-items/${itemId}/`)
-      await this.fetchOrderItems()
+      this.orderItems = this.orderItems.filter(item => item.id !== itemId);
     },
 
     // 4) загрузить список
@@ -547,7 +620,7 @@ export default {
       const {data} = await axios.get('/api/supplier-order-items/', {
         params: {order: this.selectedId}
       })
-      this.orderItems = data
+      this.orderItems = data.map(this.normalizeOrderItem)
     },
 
     async fetchRelatedDocuments() {
@@ -573,7 +646,7 @@ export default {
       const allowed = [
         'status_id', 'supplier_id', 'customer_id',
         'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
-        'shipping_address', 'shipping_code', 'supplier_comment', 'amount_cny',
+        'shipping_address', 'shipping_code', 'supplier_comment', 'internal_comment', 'amount_cny',
         'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date', 'order_number',
       ];
       allowed.forEach(k => {
@@ -605,21 +678,17 @@ export default {
     },
 
     async updatePosition(item) {
-      if (String(item.id).startsWith('tmp-')) return;
-      await axios.patch(`/api/supplier-order-items/${item.id}/`, {
-        quantity: item.quantity
-      })
-      // либо перезагрузка:
-      await this.fetchOrderItems()
+      item.quantity = this.formatQuantityInput(item.quantity);
     },
     async onProductSaved(product) {
       this.showProductModal = false;
+      this.positionSearch = '';
+      this.productSuggestions = [];
       if (!this.addProductToOrderAfterSave) {
         this.orderItems = this.orderItems.map(item =>
           item.product?.id === product.id ? {...item, product} : item
         );
         this.addProductToOrderAfterSave = false;
-        if (this.selectedId) await this.fetchOrderItems();
         return;
       }
       this.addProductToOrderAfterSave = false;
@@ -635,19 +704,52 @@ export default {
         });
         return;
       }
-      await axios.post('/api/supplier-order-items/', {
-        order: this.selectedId,
-        product_id: product.id,
-        quantity: 1,                // можете читать из какого-то поля, если нужно
+      if (!this.orderForm.supplier_id && product.supplier?.id) {
+        this.orderForm.supplier_id = product.supplier.id;
+      }
+      this.orderItems.push({
+        id: `tmp-${Date.now()}-${product.id}`,
+        product,
+        quantity: 1,
+        comment: '',
       });
-
-      // и обновляем список позиций
-      await this.fetchOrderItems();
+    },
+    onReferenceCreated({type, item}) {
+      const lists = {
+        category: this.categories,
+        unit: this.units,
+        supplier: this.suppliers,
+      };
+      const list = lists[type];
+      if (list && !list.some(existing => existing.id === item.id)) {
+        list.push(item);
+      }
     },
     /* --- навигация --- */
     goBack() {
+      this.leaveToOrders();
+    },
+    async leaveToOrders() {
+      const canLeave = await this.confirmUnsavedChanges();
+      if (!canLeave) return;
       const query = this.selectedId ? {highlight: this.selectedId} : {};
       this.$router.push({path: '/supplier-orders', query});
+    },
+    async confirmUnsavedChanges() {
+      if (!this.hasUnsavedChanges) return true;
+      if (confirm('Save changes before leaving?')) {
+        const saved = await this.saveOrder({silent: true});
+        return !!saved;
+      }
+      return confirm('Leave without saving changes?');
+    },
+    showSaveToast(message) {
+      this.saveToast = message;
+      if (this.saveToastTimer) clearTimeout(this.saveToastTimer);
+      this.saveToastTimer = setTimeout(() => {
+        this.saveToast = '';
+        this.saveToastTimer = null;
+      }, 1800);
     },
 
     /* --- util --- */
@@ -656,6 +758,58 @@ export default {
       this.orderItems = [];
       this.relatedRoot = null;
       this.relatedDocs = [];
+    },
+    currentSnapshot() {
+      return JSON.stringify({
+        order: {
+          status_id: this.orderForm.status_id || '',
+          supplier_id: this.orderForm.supplier_id || '',
+          customer_id: this.orderForm.customer_id || '',
+          planned_receipt_date: this.orderForm.planned_receipt_date || '',
+          shipment_date: this.orderForm.shipment_date || '',
+          china_exit_date: this.orderForm.china_exit_date || '',
+          delivery_date: this.orderForm.delivery_date || '',
+          shipping_address: this.orderForm.shipping_address || '',
+          shipping_code: this.orderForm.shipping_code || '',
+          supplier_comment: this.orderForm.supplier_comment || '',
+          internal_comment: this.orderForm.internal_comment || '',
+          amount_cny: this.orderForm.amount_cny || '',
+          track_number: this.orderForm.track_number || '',
+          logistic_invoice_no: this.orderForm.logistic_invoice_no || '',
+          production_due_date: this.orderForm.production_due_date || '',
+          payment_date: this.orderForm.payment_date || '',
+        },
+        items: this.orderItems.map(item => ({
+          id: item.id,
+          product_id: item.product?.id,
+          quantity: this.numberOrZero(item.quantity),
+          comment: item.comment || '',
+        })),
+        attachments: this.attachments.map(file => file.name),
+      });
+    },
+    updateSavedSnapshot() {
+      this.savedSnapshot = this.currentSnapshot();
+      this.savedItemIds = this.orderItems
+        .filter(item => !String(item.id).startsWith('tmp-'))
+        .map(item => item.id);
+    },
+    numberOrZero(value) {
+      const numberValue = Number(String(value ?? 0).replace(',', '.'));
+      return Number.isFinite(numberValue) ? numberValue : 0;
+    },
+    formatQuantityInput(value) {
+      return this.numberOrZero(value);
+    },
+    formatPrice(value) {
+      const numberValue = this.numberOrZero(value);
+      return numberValue ? numberValue.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : '—';
+    },
+    normalizeOrderItem(item) {
+      return {
+        ...item,
+        quantity: this.formatQuantityInput(item.quantity),
+      };
     },
     formatDate(v) {
       return v ? new Date(v).toLocaleString() : '—';
@@ -708,6 +862,10 @@ export default {
 
     async saveOrder(options = {}) {
       const silent = options?.silent === true;
+      if (this.isEdit && !this.hasUnsavedChanges) {
+        if (!silent) this.showSaveToast('No changes to save');
+        return this.orderForm;
+      }
       this.isSaving = true;
       const pendingItems = this.selectedId ? [] : [...this.orderItems];
       try {
@@ -716,12 +874,12 @@ export default {
         const allowed = [
           'status_id', 'supplier_id', 'customer_id',
           'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
-          'shipping_address', 'shipping_code', 'supplier_comment', 'amount_cny',
+          'shipping_address', 'shipping_code', 'supplier_comment', 'internal_comment', 'amount_cny',
           'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date', 'order_number',
         ];
         allowed.forEach(k => {
           const v = this.orderForm[k];
-          if (v != null && v !== '') fd.append(k, v);
+          if (v != null && (v !== '' || ['supplier_comment', 'internal_comment'].includes(k))) fd.append(k, v);
         });
 
         /* QR */
@@ -737,8 +895,31 @@ export default {
         if (this.isEdit) {
           /* PATCH */
           res = await axios.patch(`/api/supplier-order/${this.selectedId}/`, fd, cfg);
+          const currentExistingIds = this.orderItems
+            .filter(item => !String(item.id).startsWith('tmp-'))
+            .map(item => item.id);
+          const removedIds = this.savedItemIds.filter(id => !currentExistingIds.includes(id));
+          for (const itemId of removedIds) {
+            await axios.delete(`/api/supplier-order-items/${itemId}/`);
+          }
+          for (const item of this.orderItems) {
+            if (String(item.id).startsWith('tmp-')) {
+              await axios.post('/api/supplier-order-items/', {
+                order: this.selectedId,
+                product_id: item.product.id,
+                quantity: item.quantity,
+                comment: item.comment || '',
+              });
+            } else {
+              await axios.patch(`/api/supplier-order-items/${item.id}/`, {
+                quantity: item.quantity,
+                comment: item.comment || '',
+              });
+            }
+          }
+          await this.fetchOrderItems();
           this.orderForm = {...this.orderForm, ...res.data};
-          alert('Заказ сохранён');
+          if (!silent) this.showSaveToast('Order saved');
         } else {
           /* POST → переводим страницу в режим редактирования созданного заказа */
           res = await axios.post('/api/supplier-order/', fd, cfg);
@@ -759,16 +940,18 @@ export default {
             supplier_id: res.data.supplier?.id,
             customer_id: res.data.customer?.id,
           };
-          alert('Заказ создан');
+          if (!silent) this.showSaveToast('Order created');
           await this.$router.replace(`/supplier-orders/${res.data.id}`);
           await this.fetchOrderItems();
           this.attachments = [];
+        this.updateSavedSnapshot();
           return res.data;
           return;                /* компонент перезагрузится watcher-ом */
         }
 
         /* очищаем буферы */
         this.attachments = [];
+        this.updateSavedSnapshot();
         return res.data;
 
       } catch (e) {
@@ -810,6 +993,21 @@ export default {
     },
 
     /* --- отображение полей в истории --- */
+    async openProductHistory() {
+      const productId = this.editingProduct?.id;
+      if (!productId) return;
+      try {
+        this.productHistoryLogs = (await axios.get(`/api/products/${productId}/history/`)).data;
+        this.showProductHistoryModal = true;
+      } catch (e) {
+        console.error(e);
+        alert('Unable to load product history.');
+      }
+    },
+    closeProductHistory() {
+      this.showProductHistoryModal = false;
+    },
+
     fieldLabel(k) {
       const m = {
         order_number: 'Order#', supplier_id: 'Supplier', customer_id: 'Customer',
@@ -818,7 +1016,8 @@ export default {
         logistic_invoice_no: 'Logistic Invoice#', china_exit_date: 'China Exit',
         production_due_date: 'Production Due', payment_date: 'Payment Date',
         payment_details_qr: 'Payment QR', shipping_address: 'Address',
-        shipping_code: 'Code', supplier_comment: 'Comment', status_id: 'Status'
+        shipping_code: 'Code', supplier_comment: 'Supplier Comment',
+        internal_comment: 'Internal Comment', status_id: 'Status'
       };
       return m[k] || k;
     },
@@ -833,6 +1032,49 @@ export default {
     },
 
     /* --- QR-код --- */
+    attachmentName(att) {
+      if (att.file_name) return att.file_name;
+      const rawName = att.file ? att.file.split('/').pop() : '';
+      try {
+        return decodeURIComponent(rawName);
+      } catch {
+        return rawName;
+      }
+    },
+    productFieldLabel(key) {
+      const map = {
+        name: 'Name',
+        sku: 'SKU',
+        description: 'Description',
+        category_id: 'Category',
+        unit_id: 'Unit',
+        supplier_id: 'Supplier',
+        quantity: 'Quantity',
+        purchase_price: 'Purchase Price',
+        sale_price: 'Sale Price',
+        image: 'Image',
+      };
+      return map[key] || key;
+    },
+    formatProductHistoryValue(field, val) {
+      if (field === 'category_id') {
+        const category = this.categories.find(x => String(x.id) === String(val));
+        return category ? category.name : '—';
+      }
+      if (field === 'unit_id') {
+        const unit = this.units.find(x => String(x.id) === String(val));
+        return unit ? unit.name : '—';
+      }
+      if (field === 'supplier_id') {
+        const supplier = this.suppliers.find(x => String(x.id) === String(val));
+        return supplier ? supplier.name : '—';
+      }
+      if (field === 'image') {
+        return val ? val.split('/').pop() : '—';
+      }
+      return val != null && val !== '' ? val : '—';
+    },
+
     showQr(url) {
       this.qrModalUrl = url;
       this.showQrContent = true;
@@ -881,6 +1123,171 @@ export default {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.product-suggestion {
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.product-suggestion:hover {
+  background-color: #eef5ff;
+}
+.product-suggestions-list {
+  z-index: 1000;
+  max-width: 100%;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.compact-position-search {
+  max-width: 520px;
+}
+.compact-text-field {
+  max-width: 760px;
+}
+.compact-files-block {
+  max-width: 520px;
+}
+.order-form-grid [class*="col-"]:not(.col-12):not(.col-6) {
+  flex: 0 0 auto;
+  width: min(100%, 250px);
+}
+.order-form-grid .col-6:not(.payment-qr-col) {
+  flex: 0 0 auto;
+  width: min(100%, 250px);
+}
+.order-form-grid .col-12 textarea {
+  width: 100%;
+}
+.qr-preview-box,
+.qr-modal-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8e0e7;
+  border-radius: 8px;
+  background: #fff;
+}
+.qr-preview-box {
+  width: 220px;
+  height: 220px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+.qr-preview-box:hover {
+  border-color: #7f95a8;
+  box-shadow: 0 8px 22px rgba(47, 63, 80, 0.12);
+  transform: translateY(-1px);
+}
+.qr-modal {
+  z-index: 1090;
+}
+.qr-backdrop {
+  z-index: 1085;
+}
+.qr-dialog {
+  width: min(440px, calc(100vw - 1rem));
+  max-width: min(440px, calc(100vw - 1rem));
+  margin-left: auto;
+  margin-right: auto;
+}
+.qr-dialog .modal-body {
+  padding: 1rem;
+}
+.qr-preview-image,
+.qr-modal-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.qr-modal-frame {
+  width: min(360px, calc(100vw - 4rem));
+  height: min(360px, calc(100vw - 4rem));
+  margin: 0 auto;
+  padding: 14px;
+}
+.product-link {
+  color: #0d6efd;
+  cursor: pointer;
+}
+.product-link:hover {
+  color: #0a58ca;
+  text-decoration: underline;
+}
+.positions-table-wrap {
+  max-width: 760px;
+  overflow-x: auto;
+}
+.positions-table {
+  table-layout: fixed;
+  min-width: 560px;
+}
+.positions-table th,
+.positions-table td {
+  white-space: nowrap;
+}
+.positions-table th.product-col,
+.positions-table td.product-col {
+  width: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.supplier-positions-table {
+  width: auto;
+}
+.unit-col {
+  width: 78px;
+}
+.qty-col {
+  width: 86px;
+}
+.qty-input {
+  width: 64px;
+  text-align: center;
+}
+.money-col {
+  width: 120px;
+}
+.action-col {
+  width: 48px;
+  text-align: center;
+}
+.position-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+}
+.save-toast {
+  position: fixed;
+  top: 82px;
+  left: 50%;
+  z-index: 1080;
+  min-width: 180px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid #badbcc;
+  border-radius: 0.375rem;
+  background: #d1e7dd;
+  color: #0f5132;
+  box-shadow: 0 8px 22px rgba(15, 81, 50, 0.16);
+  font-weight: 600;
+  text-align: center;
+  transform: translateX(-50%);
+}
+.save-toast-enter-active,
+.save-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.save-toast-enter-from,
+.save-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
 }
 
 </style>
