@@ -1,3 +1,5 @@
+from .models import Invitation
+
 from django.conf import settings
 from django.core.mail import send_mail
 
@@ -15,6 +17,6 @@ def send_invitation_email(email, token, company_name):
     message = (
         f"You have been invited to join {company_name}.\n\n"
         f"Open this link to accept the invitation:\n{invite_url}\n\n"
-        "The invitation expires in 7 days."
+        f"The invitation expires in {Invitation.VALIDITY_DAYS} days."
     )
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [email])

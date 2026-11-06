@@ -33,8 +33,8 @@
     </div>
 
     <!-- Add Button -->
-    <div class="d-flex justify-content-center gap-2 mb-3">
-      <button class="btn btn-primary mb-3" @click="openModal">
+    <div class="d-flex flex-wrap justify-content-center gap-2 mb-3">
+      <button v-if="canManageOrders" class="btn btn-primary mb-3" @click="openModal">
         + Add Order
       </button>
       <button
@@ -42,9 +42,12 @@
           @click="exportOrders"
       >
         <i class="bi bi-download me-1"></i>
-        Export
+        Export orders
       </button>
+      <button v-if="canViewFinancialReports" class="btn btn-outline-primary mb-3" :disabled="isLoading" @click="showAnalytics = true">Customer analytics</button>
     </div>
+    <OrderAnalyticsModal v-if="showAnalytics" kind="customer" :options="customers" :initial-query="filters.customerQuery" @close="showAnalytics = false" />
+
     <!-- Table -->
     <div class="table-responsive">
       <table class="table table-hover table-bordered align-middle">
@@ -64,7 +67,21 @@
             @click="editOrder(item)"
             style="cursor: pointer;"
         >
-          <td>{{ item.order_number }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <span>{{ item.order_number }}</span>
+              <span
+                  v-if="item.sent_at"
+                  class="sent-badge"
+                  :title="`Sent ${formatDateTime(item.sent_at)}`"
+              >Sent</span>
+            </div>
+            <small
+                v-if="item.created_at"
+                class="order-created-date"
+                :class="{ 'previous-year-date': item.is_previous_year }"
+            >{{ formatDate(item.created_at) }}</small>
+          </td>
           <td>{{ item.customer?.name || '—' }}</td>
           <td>{{ formatDate(item.shipment_date) }}</td>
           <td>
@@ -72,11 +89,12 @@
                   v-if="item.status"
                   class="badge rounded-pill"
                   :style="{ backgroundColor: item.status.color, color: '#fff' }"
-              >{{ item.status.name }}</span>
+              >{{ item.status.display_name || item.status.name }}</span>
             <span v-else class="text-muted">—</span>
           </td>
           <td @click.stop>
-            <button class="btn btn-sm btn-danger" @click="deleteOrder(item.id)">
+            <ChatShareButton type="customer_order" :record-id="item.id" :title="`Заказ покупателя №${item.order_number}`" class="me-1" compact />
+            <button v-if="canManageOrders" class="btn btn-sm btn-danger" @click="deleteOrder(item.id)">
               Delete
             </button>
           </td>
@@ -91,19 +109,19 @@
       </table>
     </div>
 
-    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+    <div class="d-flex justify-content-between align-items-center mt-3 mb-4" v-if="totalCount">
       <div class="text-muted small">
-        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+        {{ $t(`Showing ${pageStart}-${pageEnd} of ${totalCount}`) }}
       </div>
       <div class="btn-group">
         <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
-          Previous
+          {{ $t('Previous') }}
         </button>
         <button class="btn btn-outline-secondary btn-sm disabled">
-          Page {{ page }} / {{ totalPages }}
+          {{ $t(`Page ${page} / ${totalPages}`) }}
         </button>
         <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
-          Next
+          {{ $t('Next') }}
         </button>
       </div>
     </div>
@@ -111,17 +129,30 @@
 </template>
 
 <script>
+import OrderAnalyticsModal from '../components/OrderAnalyticsModal.vue';
 import axios from '../axios';
+import ChatShareButton from '../components/ChatShareButton.vue';
 import AutocompleteInput from '../components/AutocompleteInput.vue';
-import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+import { clearCacheByPrefix, getCachedJson, setCachedJson } from '../utils/pageCache';
+import { accessState, hasPermission, PERMISSIONS } from '../access';
+import {
+  applyPaginatedData,
+  changeTablePage,
+  DEFAULT_PAGE_SIZE,
+  getCachedTablePage,
+  makeTableCacheKey,
+  pageMeta,
+  restoreTableStateSnapshot,
+  saveTableStateSnapshot,
+  setCachedTablePage,
+} from '../utils/tablePage';
 
 const TABLE_STATE_KEY = 'customer-orders-table-state';
 const STATUS_CACHE_KEY = 'customer-order-statuses:v2';
-const PAGE_SIZE = 50;
 
 export default {
   name: 'CustomerOrdersPage',
-  components: { AutocompleteInput },
+  components: { ChatShareButton, AutocompleteInput, OrderAnalyticsModal },
   data() {
     return {
       /* справочники */
@@ -135,22 +166,29 @@ export default {
       searchQuery: '',
       filters: {customerQuery: '', status: ''},
       page: 1,
-      pageSize: PAGE_SIZE,
+      pageSize: DEFAULT_PAGE_SIZE,
       totalCount: 0,
       isLoading: false,
       searchTimer: null,
+      showAnalytics: false,
     };
   },
 
   computed: {
+    canManageOrders() {
+      return hasPermission(PERMISSIONS.CUSTOMER_ORDERS_MANAGE, accessState.user);
+    },
+    canViewFinancialReports() {
+      return hasPermission(PERMISSIONS.FINANCIAL_REPORTS_VIEW, accessState.user);
+    },
     totalPages() {
-      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+      return pageMeta(this.page, this.totalCount, this.pageSize).totalPages;
     },
     pageStart() {
-      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageStart;
     },
     pageEnd() {
-      return Math.min(this.page * this.pageSize, this.totalCount);
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageEnd;
     },
   },
 
@@ -164,6 +202,7 @@ export default {
     async exportOrders() {
       try {
         const res = await axios.get('/api/customer-order/export/', {
+          params: { ...this.orderQueryParams(), page: undefined, page_size: undefined },
           responseType: 'blob'
         });
         // создаём ссылку и кликаем для скачивания
@@ -177,7 +216,7 @@ export default {
         window.URL.revokeObjectURL(url);
       } catch (e) {
         console.error(e);
-        alert('Не удалось экспортировать заказы');
+        alert('Unable to export orders.');
       }
     },
     /* --- API --- */
@@ -206,12 +245,12 @@ export default {
         }
       } catch (e) {
         console.error(e);
-        alert('Ошибка при загрузке справочников');
+        alert('Unable to load reference data.');
       }
     },
     async fetchOrders({ useCache = false } = {}) {
       const cacheKey = this.ordersCacheKey();
-      const cached = useCache ? getCachedJson(cacheKey) : null;
+      const cached = getCachedTablePage(cacheKey, useCache);
       if (cached) {
         this.applyOrdersResponse(cached);
       }
@@ -221,7 +260,7 @@ export default {
         const res = await axios.get('/api/customer-order/', {
           params: this.orderQueryParams()
         });
-        setCachedJson(cacheKey, res.data);
+        setCachedTablePage(cacheKey, res.data);
         this.applyOrdersResponse(res.data);
       } catch (e) {
         console.error(e);
@@ -234,6 +273,9 @@ export default {
     /* --- утилиты --- */
     formatDate(v) {
       return v ? new Date(v).toLocaleDateString() : '—';
+    },
+    formatDateTime(v) {
+      return v ? new Date(v).toLocaleString() : '—';
     },
     resetFilters() {
       this.searchQuery = '';
@@ -254,22 +296,16 @@ export default {
       };
     },
     ordersCacheKey() {
-      return `customer-orders:${JSON.stringify(this.orderQueryParams())}`;
+      return makeTableCacheKey('customer-orders:v2', this.orderQueryParams());
     },
     applyOrdersResponse(data) {
-      const page = paginatedResults(data);
-      this.orders = page.results;
-      this.totalCount = page.count;
+      applyPaginatedData(this, data, 'orders');
     },
     saveTableState() {
-      setSavedState(TABLE_STATE_KEY, {
-        page: this.page,
-        searchQuery: this.searchQuery,
-        filters: this.filters,
-      });
+      saveTableStateSnapshot(TABLE_STATE_KEY, this);
     },
     restoreTableState() {
-      const state = getSavedState(TABLE_STATE_KEY, {
+      const state = restoreTableStateSnapshot(TABLE_STATE_KEY, {
         page: 1,
         searchQuery: '',
         filters: {customerQuery: '', status: ''},
@@ -290,10 +326,7 @@ export default {
       }, 300);
     },
     changePage(page) {
-      if (page < 1 || page > this.totalPages || page === this.page) return;
-      this.page = page;
-      this.saveTableState();
-      this.fetchOrders({ useCache: true });
+      changeTablePage(this, page, 'fetchOrders');
     },
 
     openModal() {
@@ -305,7 +338,7 @@ export default {
 
     /* --- действия --- */
     async deleteOrder(id) {
-      if (!confirm('Удалить заказ?')) return;
+      if (!confirm('Delete this order?')) return;
       try {
         await axios.delete(`/api/customer-order/${id}/`);
         clearCacheByPrefix('customer-orders:');
@@ -313,9 +346,38 @@ export default {
         this.totalCount = Math.max(0, this.totalCount - 1);
       } catch (e) {
         console.error(e);
-        alert('Ошибка при удалении');
+        alert('Unable to delete order.');
       }
     }
   }
 };
 </script>
+
+<style scoped>
+.sent-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.52rem;
+  border: 1px solid #badbcc;
+  border-radius: 999px;
+  background: #d1e7dd;
+  color: #0f5132;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.1;
+  vertical-align: middle;
+}
+</style>
+
+<style scoped>
+.order-created-date {
+  display: inline-block;
+  margin-top: 2px;
+  color: #6c757d;
+}
+.previous-year-date {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background-color: #eceff1;
+}
+</style>

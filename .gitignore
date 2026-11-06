@@ -12,6 +12,7 @@ backend/.env
 # Django static/media
 backend/staticfiles/
 backend/media/
+backend/private_chat_files/
 
 # Node.js (Vue)
 node_modules/

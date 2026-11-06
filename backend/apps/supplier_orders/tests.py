@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import UTC, datetime
 import shutil
 import tempfile
 
@@ -9,7 +10,9 @@ from rest_framework.test import APITestCase
 
 from counterparties.models import Counterparty
 from products.models import Product
-from supplier_orders.models import SupplierOrder, SupplierOrderItem, SupplierOrderStatus
+from supplier_orders.models import SupplierOrder, SupplierOrderChangeLog, SupplierOrderItem, SupplierOrderStatus
+from supplier_orders.models import ShippingAddress as SupplierShippingAddress
+from supplier_orders.serializers import SupplierOrderChangeLogSerializer
 from users.models import Company, CustomUser
 
 
@@ -34,6 +37,7 @@ class SupplierOrderRepresentationTests(APITestCase):
             email='manager@example.com',
             password='pass',
             company=self.company,
+            is_company_admin=True,
         )
         self.client.force_authenticate(self.user)
         self.status = SupplierOrderStatus.objects.create(
@@ -96,3 +100,110 @@ class SupplierOrderRepresentationTests(APITestCase):
         self.assertEqual(first['amount_cny'], '50.00')
         self.assertIn('supplier-qr', first['payment_details_qr'])
         self.assertNotIn('old-order-qr', first['payment_details_qr'])
+
+    def test_shipping_address_can_be_cleared_on_existing_order(self):
+        self.company.china_warehouse_address = 'Moscow warehouse'
+        self.company.save(update_fields=['china_warehouse_address'])
+        self.order.shipping_address = 'Old address'
+        self.order.save(update_fields=['shipping_address'])
+
+        response = self.client.patch(
+            f'/api/supplier-order/{self.order.id}/',
+            {'shipping_address': ''},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.shipping_address, '')
+
+    def test_new_supplier_order_uses_company_china_warehouse_address(self):
+        self.company.china_warehouse_address = 'Moscow warehouse'
+        self.company.save(update_fields=['china_warehouse_address'])
+        SupplierShippingAddress.objects.create(
+            company=self.company,
+            default_shipping_address='Legacy Moscow warehouse',
+        )
+
+        order = SupplierOrder.objects.create(
+            company=self.company,
+            supplier=self.supplier,
+            status=self.status,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        self.assertEqual(order.shipping_address, 'Moscow warehouse')
+
+    def test_new_supplier_order_ignores_legacy_shipping_address_when_company_address_is_empty(self):
+        SupplierShippingAddress.objects.create(
+            company=self.company,
+            default_shipping_address='Legacy Moscow warehouse',
+        )
+
+        order = SupplierOrder.objects.create(
+            company=self.company,
+            supplier=self.supplier,
+            status=self.status,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        self.assertEqual(order.shipping_address, '')
+
+    def test_change_history_uses_project_local_time(self):
+        log = SupplierOrderChangeLog.objects.create(
+            supplier_order=self.order,
+            field_name='shipping_address',
+            old_value='Old',
+            new_value='',
+            changed_by=self.user,
+        )
+        log.changed_at = datetime(2026, 8, 26, 10, 6, tzinfo=UTC)
+        log.save(update_fields=['changed_at'])
+
+        data = SupplierOrderChangeLogSerializer(log).data
+
+        self.assertEqual(data['changed_at'], '2026-08-26 15:06')
+
+    def test_item_purchase_price_is_snapshotted_and_not_changed_with_product(self):
+        item = self.order.items.get()
+        self.assertEqual(item.unit_price_cny, Decimal('12.50'))
+
+        self.product.purchase_price = Decimal('99.00')
+        self.product.save(update_fields=['purchase_price'])
+        item.refresh_from_db()
+
+        self.assertEqual(item.unit_price_cny, Decimal('12.50'))
+
+    def test_item_purchase_price_can_be_changed_and_is_logged(self):
+        item = self.order.items.get()
+
+        response = self.client.patch(
+            f'/api/supplier-order-items/{item.id}/',
+            {'unit_price_cny': '11.75'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.unit_price_cny, Decimal('11.75'))
+        log = SupplierOrderChangeLog.objects.get(
+            supplier_order=self.order,
+            field_name='item_unit_price_cny',
+        )
+        self.assertEqual(log.old_value, 'FAB-001: 12.50')
+        self.assertEqual(log.new_value, 'FAB-001: 11.75')
+        self.assertEqual(log.changed_by, self.user)
+
+    def test_item_purchase_price_cannot_be_negative(self):
+        item = self.order.items.get()
+
+        response = self.client.patch(
+            f'/api/supplier-order-items/{item.id}/',
+            {'unit_price_cny': '-0.01'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('unit_price_cny', response.data)
+        item.refresh_from_db()
+        self.assertEqual(item.unit_price_cny, Decimal('12.50'))

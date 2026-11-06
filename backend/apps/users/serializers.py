@@ -2,7 +2,9 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
-from django.utils import timezone
+from django.db import transaction
+from rest_framework.exceptions import APIException
+from django.utils import timezone, translation
 from django_countries import countries
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
@@ -11,7 +13,11 @@ import hashlib
 import random
 import re
 
-from .access import ensure_default_access_structure
+from .access import (
+    access_role_account_flags,
+    ensure_default_access_structure,
+    user_permission_codes,
+)
 from .company_defaults import company_defaults_for_country
 from .company_setup import ensure_default_company_directories
 from .models import AccessRole, Company, CompanyMembership, Department, Invitation
@@ -52,10 +58,11 @@ class RegisterSerializer(serializers.ModelSerializer):
     password2 = serializers.CharField(write_only=True)
     company_name = serializers.CharField(write_only=True)
     business_country = serializers.ChoiceField(choices=countries, write_only=True)
+    language_code = serializers.ChoiceField(choices=Company.LANGUAGE_CHOICES, write_only=True, default='ru')
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'password2', 'company_name', 'business_country')
+        fields = ('id', 'username', 'email', 'password', 'password2', 'company_name', 'business_country', 'language_code')
         read_only_fields = ('id',)
 
     def validate_email(self, value):
@@ -92,6 +99,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data.pop('password2')
         company_name = validated_data.pop('company_name').strip()
         business_country = validated_data.pop('business_country')
+        language_code = validated_data.pop('language_code', 'ru')
 
         code = generate_numeric_code()
         user = User.objects.create_user(
@@ -105,16 +113,17 @@ class RegisterSerializer(serializers.ModelSerializer):
         send_verification_email(user.email, code)
 
         company_defaults = company_defaults_for_country(business_country)
-        company = Company(name=company_name, created_by=user)
+        company = Company(name=company_name, created_by=user, language_code=language_code)
         company.apply_country_defaults(company_defaults['business_country'])
         company.save()
         roles = ensure_default_access_structure(company)
         ensure_default_company_directories(company)
 
         user.company = company
+        user.notification_language = language_code
         user.is_company_admin = True
         user.access_role = roles.get('Company admin')
-        user.save(update_fields=['company', 'is_company_admin', 'access_role'])
+        user.save(update_fields=['company', 'notification_language', 'is_company_admin', 'access_role'])
         CompanyMembership.objects.get_or_create(
             user=user,
             company=company,
@@ -139,7 +148,26 @@ class RegisterSerializer(serializers.ModelSerializer):
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = ('id', 'name')
+        fields = ('id', 'name', 'translations', 'is_archived')
+        validators = []
+
+    def validate_translations(self, value):
+        if not isinstance(value, dict) or set(value) - {'ru', 'en'}:
+            raise serializers.ValidationError('Use Russian and English names.')
+        if any(not isinstance(name, str) or len(name.strip()) > 150 for name in value.values()):
+            raise serializers.ValidationError('Department names must be at most 150 characters.')
+        return {key: name.strip() for key, name in value.items()}
+
+    def validate_name(self, value):
+        value = value.strip()
+        duplicates = Department.objects.filter(
+            company=self.context['request'].user.company, name__iexact=value,
+        )
+        if self.instance:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.exists():
+            raise serializers.ValidationError('A department with this name already exists.')
+        return value
 
 
 class AccessRoleSerializer(serializers.ModelSerializer):
@@ -155,12 +183,13 @@ class CompanyMembershipSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     access_role_name = serializers.CharField(source='access_role.name', read_only=True)
     department_name = serializers.CharField(source='department.name', read_only=True)
+    department_translations = serializers.JSONField(source='department.translations', read_only=True)
 
     class Meta:
         model = CompanyMembership
         fields = (
             'id', 'company', 'company_name', 'role', 'role_display',
-            'access_role', 'access_role_name', 'department_name',
+            'access_role', 'access_role_name', 'department_name', 'department_translations',
             'position', 'is_company_admin', 'status', 'created_at',
             'disabled_at', 'disabled_by', 'disable_reason',
         )
@@ -178,6 +207,7 @@ class EmployeeMembershipSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     access_role_name = serializers.CharField(source='access_role.name', read_only=True)
     department_name = serializers.CharField(source='department.name', read_only=True)
+    department_translations = serializers.JSONField(source='department.translations', read_only=True)
     disabled_by_email = serializers.EmailField(source='disabled_by.email', read_only=True)
     can_dismiss = serializers.SerializerMethodField()
 
@@ -186,7 +216,7 @@ class EmployeeMembershipSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'email', 'username', 'first_name', 'last_name', 'middle_name',
             'phone', 'work_email', 'personal_email', 'role', 'role_display',
-            'access_role_name', 'department_name', 'position',
+            'access_role', 'access_role_name', 'department_name', 'department_translations', 'position',
             'is_company_admin', 'status', 'created_at', 'disabled_at',
             'disabled_by_email', 'disable_reason', 'can_dismiss',
         )
@@ -204,6 +234,25 @@ class EmployeeMembershipSerializer(serializers.ModelSerializer):
         if obj.is_company_admin and obj.company.created_by_id != request.user.id:
             return False
         return True
+
+
+class EmployeeAccessRoleUpdateSerializer(serializers.Serializer):
+    access_role = serializers.PrimaryKeyRelatedField(queryset=AccessRole.objects.none())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated and request.user.company_id:
+            ensure_default_access_structure(request.user.company)
+            self.fields['access_role'].queryset = AccessRole.objects.filter(
+                company=request.user.company,
+            )
+
+    def validate_access_role(self, access_role):
+        request = self.context['request']
+        if access_role.company_id != request.user.company_id:
+            raise serializers.ValidationError('Access role is not available for your company.')
+        return access_role
 
 
 class SwitchCompanySerializer(serializers.Serializer):
@@ -225,9 +274,16 @@ class SwitchCompanySerializer(serializers.Serializer):
         return self.membership
 
 
+class InvitationDeliveryError(APIException):
+    status_code = 503
+    default_detail = 'Unable to send invitation email. Please try again.'
+    default_code = 'invitation_delivery_failed'
+
+
 class InvitationSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     department_display = serializers.CharField(source='department.name', read_only=True)
+    department_translations = serializers.JSONField(source='department.translations', read_only=True)
     access_role_display = serializers.CharField(source='access_role.name', read_only=True)
     invited_by_display = serializers.CharField(source='invited_by.email', read_only=True)
     accept_url = serializers.SerializerMethodField()
@@ -236,11 +292,11 @@ class InvitationSerializer(serializers.ModelSerializer):
         model = Invitation
         fields = (
             'id', 'email', 'first_name', 'last_name', 'position', 'role',
-            'department', 'department_name', 'department_display',
+            'department', 'department_name', 'department_display', 'department_translations',
             'access_role', 'access_role_display', 'invited_by_display',
             'status', 'expires_at', 'accepted_at', 'created_at', 'accept_url',
         )
-        read_only_fields = ('id', 'status', 'expires_at', 'accepted_at', 'created_at', 'accept_url')
+        read_only_fields = ('id', 'role', 'status', 'expires_at', 'accepted_at', 'created_at', 'accept_url')
         extra_kwargs = {
             'department': {'required': False, 'allow_null': True},
             'access_role': {'required': False, 'allow_null': True},
@@ -280,22 +336,33 @@ class InvitationSerializer(serializers.ModelSerializer):
         role = data.get('access_role')
         if role and role.company_id != request_user.company_id:
             raise serializers.ValidationError("Access role is not available for your company.")
+        if not role:
+            roles = ensure_default_access_structure(request_user.company)
+            role = roles['Viewer']
+            data['access_role'] = role
+        if (
+            role.name == 'Company admin'
+            and request_user.company.created_by_id != request_user.id
+        ):
+            raise PermissionDenied('Only the company creator can grant company administrator access.')
+
+        legacy_role, _is_company_admin = access_role_account_flags(role)
+        data['role'] = legacy_role
 
         department = data.get('department')
-        if department and department.company_id != request_user.company_id:
-            raise serializers.ValidationError("Department is not available for your company.")
+        if data.get('department_name'):
+            raise serializers.ValidationError({'department_name': 'Select a department from company settings.'})
+        if department and (department.company_id != request_user.company_id or department.is_archived):
+            raise serializers.ValidationError({'department': 'Department is not available for your company.'})
 
         return data
 
+    @transaction.atomic
     def create(self, validated_data):
         request_user = self.context['request'].user
-        department_name = validated_data.pop('department_name', '').strip()
-        if department_name and not validated_data.get('department'):
-            department, _ = Department.objects.get_or_create(
-                company=request_user.company,
-                name=department_name,
-            )
-            validated_data['department'] = department
+        # Serialise sends for one company, including duplicate invitations.
+        Company.objects.select_for_update().get(pk=request_user.company_id)
+        validated_data.pop('department_name', None)
 
         Invitation.objects.filter(
             company=request_user.company,
@@ -308,18 +375,22 @@ class InvitationSerializer(serializers.ModelSerializer):
             **validated_data,
             company=request_user.company,
             invited_by=request_user,
-            expires_at=timezone.now() + timezone.timedelta(days=7),
+            expires_at=timezone.now() + timezone.timedelta(days=Invitation.VALIDITY_DAYS),
         )
         invitation.set_token(raw_token)
         invitation.save()
         invitation._raw_token = raw_token
-        send_invitation_email(invitation.email, raw_token, request_user.company.name)
+        try:
+            send_invitation_email(invitation.email, raw_token, request_user.company.name)
+        except Exception as exc:
+            raise InvitationDeliveryError() from exc
         return invitation
 
 
 class InvitationPreviewSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source='company.name', read_only=True)
     department_display = serializers.CharField(source='department.name', read_only=True)
+    department_translations = serializers.JSONField(source='department.translations', read_only=True)
     access_role_display = serializers.CharField(source='access_role.name', read_only=True)
     account_exists = serializers.SerializerMethodField()
 
@@ -327,7 +398,7 @@ class InvitationPreviewSerializer(serializers.ModelSerializer):
         model = Invitation
         fields = (
             'email', 'first_name', 'last_name', 'position', 'role',
-            'company_name', 'department_display', 'access_role_display',
+            'company_name', 'department_display', 'department_translations', 'access_role_display',
             'account_exists', 'expires_at',
         )
 
@@ -374,8 +445,11 @@ class AcceptInvitationSerializer(serializers.Serializer):
         data['existing_user'] = existing_user
         return data
 
+    @transaction.atomic
     def save(self):
-        invitation = self.validated_data['invitation']
+        invitation = Invitation.objects.select_for_update().get(pk=self.validated_data['invitation'].pk)
+        if invitation.status != Invitation.STATUS_PENDING or invitation.is_expired:
+            raise serializers.ValidationError('Invitation is invalid or expired.')
         user = self.validated_data.get('existing_user')
         if not user:
             username = self.validated_data.get('username') or invitation.email.split('@')[0]
@@ -389,17 +463,19 @@ class AcceptInvitationSerializer(serializers.Serializer):
                 first_name=first_name,
                 last_name=last_name,
                 is_email_verified=True,
+                notification_language=invitation.company.language_code or 'ru',
             )
 
+        legacy_role, is_company_admin = access_role_account_flags(invitation.access_role)
         membership, _ = CompanyMembership.objects.get_or_create(
             user=user,
             company=invitation.company,
             defaults={
-                'role': invitation.role,
+                'role': legacy_role,
                 'department': invitation.department,
                 'access_role': invitation.access_role,
                 'position': invitation.position,
-                'is_company_admin': invitation.role == 'admin',
+                'is_company_admin': is_company_admin,
             },
         )
         membership.apply_to_user()
@@ -452,33 +528,50 @@ class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.ImageField(required=False, allow_null=True)
     company_name = serializers.CharField(source='company.name', read_only=True)
     company_business_country = serializers.SerializerMethodField()
+    company_logo_url = serializers.SerializerMethodField()
     company_business_country_name = serializers.SerializerMethodField()
     company_currency_code = serializers.CharField(source='company.base_currency_code', read_only=True)
     company_currency_symbol = serializers.CharField(source='company.base_currency_symbol', read_only=True)
+    company_language_code = serializers.CharField(source='company.language_code', read_only=True)
     company_settings_needs_review = serializers.SerializerMethodField()
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     access_role_name = serializers.CharField(source='access_role.name', read_only=True)
     department_ref_name = serializers.CharField(source='department_ref.name', read_only=True)
     memberships = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id', 'username', 'email', 'role', 'role_display', 'company_id', 'company_name',
             'company_business_country', 'company_business_country_name',
+            'company_logo_url',
             'company_currency_code', 'company_currency_symbol', 'company_settings_needs_review',
+            'company_language_code',
             'is_company_admin', 'access_role', 'access_role_name', 'department_ref',
             'department_ref_name', 'first_name', 'last_name', 'middle_name', 'phone',
             'work_email', 'personal_email', 'position', 'department',
             'birth_date', 'hire_date', 'notification_language', 'avatar', 'memberships',
+            'permissions',
         )
         read_only_fields = (
             'id', 'username', 'email', 'role', 'role_display', 'company_id', 'company_name',
             'company_business_country', 'company_business_country_name',
             'company_currency_code', 'company_currency_symbol', 'company_settings_needs_review',
+            'company_language_code',
             'is_company_admin', 'access_role', 'access_role_name', 'department_ref',
-            'department_ref_name', 'memberships',
+            'department_ref_name', 'memberships', 'permissions',
         )
+
+    def get_permissions(self, obj):
+        return sorted(user_permission_codes(obj))
+
+    def get_company_logo_url(self, obj):
+        if not obj.company_id or not obj.company.logo:
+            return ''
+        url = obj.company.logo.url
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
 
     def get_memberships(self, obj):
         memberships = obj.company_memberships.select_related(
@@ -492,7 +585,11 @@ class UserSerializer(serializers.ModelSerializer):
     def get_company_business_country_name(self, obj):
         if not obj.company_id or not obj.company.business_country:
             return ''
-        return obj.company.business_country.name
+        request = self.context.get('request')
+        requested_language = getattr(getattr(request, 'user', None), 'notification_language', None)
+        language = 'en' if requested_language == 'en' else 'ru'
+        with translation.override(language):
+            return str(obj.company.business_country.name)
 
     def get_company_settings_needs_review(self, obj):
         if not obj.company_id or not obj.is_company_admin:

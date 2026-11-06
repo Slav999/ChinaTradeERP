@@ -17,6 +17,7 @@ import CounterpartyPage from '../views/CounterpartyPage.vue'
 import SupplierOrderDetail from '../views/SupplierOrderDetail.vue'
 import CustomerOrderDetail from '../views/CustomerOrderDetail.vue'
 import axios, { AUTH_SESSION_KEY, clearClientSession } from '../axios'
+import { firstAllowedRoute, hasPermission, loadCurrentUser, PERMISSIONS } from '../access'
 
 const routes = [
     {path: '/', redirect: '/login'},
@@ -31,15 +32,18 @@ const routes = [
 
     // — Основные страницы —
     {path: '/profile', component: ProfilePage},
-    {path: '/supplier-orders', component: SupplierOrdersPage},
-    {path: '/supplier-orders/new', component: SupplierOrderDetail},
-    {path: '/supplier-orders/:id', component: SupplierOrderDetail, props: true},
-    {path: '/customer-orders', component: CustomerOrdersPage},
-    {path: '/customer-orders/new', component: CustomerOrderDetail},
-    {path: '/customer-orders/:id', component: CustomerOrderDetail, props: true},
-    {path: '/products', component: ProductsPage},
-    {path: '/warehouse', component: WarehousePage},
-    {path: '/counterparty', component: CounterpartyPage},
+    {path: '/supplier-orders', component: SupplierOrdersPage, meta: {permission: PERMISSIONS.SUPPLIER_ORDERS_VIEW}},
+    {path: '/supplier-orders/new', component: SupplierOrderDetail, meta: {permission: PERMISSIONS.SUPPLIER_ORDERS_MANAGE}},
+    {path: '/supplier-orders/:id', component: SupplierOrderDetail, props: true, meta: {permission: PERMISSIONS.SUPPLIER_ORDERS_VIEW}},
+    {path: '/samples-trips', component: SupplierOrdersPage, meta: {samples: true, permission: PERMISSIONS.SUPPLIER_ORDERS_VIEW}},
+    {path: '/samples-trips/new', component: SupplierOrderDetail, meta: {samples: true, permission: PERMISSIONS.SUPPLIER_ORDERS_MANAGE}},
+    {path: '/samples-trips/:id', component: SupplierOrderDetail, props: true, meta: {samples: true, permission: PERMISSIONS.SUPPLIER_ORDERS_VIEW}},
+    {path: '/customer-orders', component: CustomerOrdersPage, meta: {permission: PERMISSIONS.CUSTOMER_ORDERS_VIEW}},
+    {path: '/customer-orders/new', component: CustomerOrderDetail, meta: {permission: PERMISSIONS.CUSTOMER_ORDERS_MANAGE}},
+    {path: '/customer-orders/:id', component: CustomerOrderDetail, props: true, meta: {permission: PERMISSIONS.CUSTOMER_ORDERS_VIEW}},
+    {path: '/products', component: ProductsPage, meta: {permission: PERMISSIONS.PRODUCTS_VIEW}},
+    {path: '/warehouse', component: WarehousePage, meta: {permission: PERMISSIONS.WAREHOUSE_VIEW}},
+    {path: '/counterparty', component: CounterpartyPage, meta: {permission: PERMISSIONS.COUNTERPARTIES_VIEW}},
 ]
 
 const router = createRouter({
@@ -71,7 +75,21 @@ router.beforeEach(async (to) => {
     if (to.meta.public && hasSession && ['/login', '/register'].includes(to.path)) {
         const sessionIsValid = await validateSession()
         if (sessionIsValid) {
-            return '/supplier-orders'
+            const user = await loadCurrentUser({force: true})
+            return firstAllowedRoute(user)
+        }
+    }
+
+    if (!to.meta.public) {
+        try {
+            const user = await loadCurrentUser()
+            if (to.meta.permission && !hasPermission(to.meta.permission, user)) {
+                const fallback = firstAllowedRoute(user)
+                return fallback === to.path ? '/profile' : fallback
+            }
+        } catch {
+            clearClientSession()
+            return {path: '/login', query: {next: to.fullPath}}
         }
     }
 

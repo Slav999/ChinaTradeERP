@@ -20,10 +20,13 @@
         />
       </div>
       <div class="col-md-2">
-        <select v-model="filters.category" class="form-select" @change="onSearchInput">
-          <option disabled selected hidden value="">Select category...</option>
-          <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+        <AutocompleteInput
+            v-model.trim="filters.categoryQuery"
+            @input="onSearchInput"
+            :options="categories"
+            :placeholder="$t('Filter by category...')"
+            translate-options
+        />
       </div>
       <div class="col-md-3">
         <AutocompleteInput
@@ -46,7 +49,7 @@
     </div>
 
     <!-- Add Button -->
-    <button class="btn btn-primary mb-3 d-block mx-auto" @click="openModal">
+    <button v-if="canManageProducts" class="btn btn-primary mb-3 d-block mx-auto" @click="openModal">
       + Add Product
     </button>
 
@@ -60,7 +63,7 @@
           <th class="d-none d-md-table-cell">Category</th>
           <th class="d-none d-md-table-cell">Unit</th>
           <th class="d-none d-md-table-cell">Supplier</th>
-          <th>Purchase / Sale Price</th>
+          <th v-if="canViewAnyProductPrice">{{ productPriceHeader }}</th>
           <th class="actions-col">Actions</th>
         </tr>
         </thead>
@@ -78,70 +81,77 @@
               <span v-if="p.is_archived" class="badge rounded-pill text-bg-secondary">Archived</span>
             </div>
             <div v-if="p.is_archived" class="small text-muted mt-1">
-              Archived {{ formatDate(p.archived_at) }}<span v-if="p.archived_by"> by {{ p.archived_by }}</span>
+                {{ $t('Archived') }} {{ formatDate(p.archived_at) }}<span v-if="p.archived_by"> {{ $t('by') }} {{ p.archived_by }}</span>
             </div>
           </td>
           <td>{{ p.sku }}</td>
-          <td class="d-none d-md-table-cell">{{ p.category?.name || '—' }}</td>
-          <td class="d-none d-md-table-cell">{{ p.unit?.name || '—' }}</td>
+          <td class="d-none d-md-table-cell">{{ p.category?.name ? $t(p.category.name) : '—' }}</td>
+          <td class="d-none d-md-table-cell">{{ p.unit?.name ? $t(p.unit.name) : '—' }}</td>
           <td class="d-none d-md-table-cell">{{ p.supplier?.name || '—' }}</td>
-          <td>{{ formatMoney(p.purchase_price, '¥') }} / {{ formatMoney(p.sale_price, companyCurrencySymbol) }}</td>
+          <td v-if="canViewAnyProductPrice">
+            <span v-if="canViewPurchasePrice">{{ formatMoney(p.purchase_price, '¥') }}</span>
+            <span v-if="canViewPurchasePrice && canViewSalePrice"> / </span>
+            <span v-if="canViewSalePrice">{{ formatMoney(p.sale_price, companyCurrencySymbol) }}</span>
+          </td>
           <td class="actions-cell" @click.stop>
-            <button
-                v-if="p.image"
-                class="btn btn-sm btn-secondary"
-                @click.stop="showImage(p.image)"
-            >Фото
-            </button>
-            <button
-                v-if="p.is_archived"
-                class="btn btn-sm btn-outline-primary"
-                @click.stop="restoreProduct(p.id)"
-            >Restore
-            </button>
-            <button
-                v-if="p.is_archived && isCompanyAdmin"
-                class="btn btn-sm btn-outline-danger"
-                @click.stop="permanentlyDeleteProduct(p.id)"
-            >Delete permanently
-            </button>
-            <button
-                v-if="!p.is_archived"
-                class="btn btn-sm btn-outline-secondary"
-                @click.stop="archiveProduct(p.id)"
-            >Archive
-            </button>
-            <button
-                v-if="!p.is_archived && !p.has_history"
-                class="btn btn-sm btn-danger"
-                @click.stop="deleteProduct(p.id)"
-            >Delete
-            </button>
+            <div class="actions-group">
+              <ChatShareButton type="product" :record-id="p.id" :title="p.name" compact />
+              <button
+                  v-if="p.image"
+                  class="btn btn-sm btn-secondary"
+                  @click.stop="showImage(p.image)"
+              >Фото
+              </button>
+              <button
+                  v-if="p.is_archived && canManageProducts"
+                  class="btn btn-sm btn-outline-primary"
+                  @click.stop="restoreProduct(p.id)"
+              >Restore
+              </button>
+              <button
+                  v-if="p.is_archived && isCompanyAdmin"
+                  class="btn btn-sm btn-outline-danger"
+                  @click.stop="permanentlyDeleteProduct(p.id)"
+              >Delete permanently
+              </button>
+              <button
+                  v-if="!p.is_archived && canManageProducts"
+                  class="btn btn-sm btn-outline-secondary"
+                  @click.stop="archiveProduct(p.id)"
+              >Archive
+              </button>
+              <button
+                  v-if="!p.is_archived && !p.has_history && canManageProducts"
+                  class="btn btn-sm btn-danger"
+                  @click.stop="deleteProduct(p.id)"
+              >Delete
+              </button>
+            </div>
           </td>
         </tr>
         <tr v-if="isLoading">
-          <td colspan="7" class="text-center text-muted">Loading...</td>
+          <td :colspan="productTableColumnCount" class="text-center text-muted">Loading...</td>
         </tr>
         <tr v-else-if="!products.length">
-          <td colspan="7" class="text-center text-muted">No products found.</td>
+          <td :colspan="productTableColumnCount" class="text-center text-muted">No products found.</td>
         </tr>
         </tbody>
       </table>
     </div>
 
-    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+    <div class="d-flex justify-content-between align-items-center mt-3 mb-4" v-if="totalCount">
       <div class="text-muted small">
-        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+        {{ $t(`Showing ${pageStart}-${pageEnd} of ${totalCount}`) }}
       </div>
       <div class="btn-group">
         <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
-          Previous
+          {{ $t('Previous') }}
         </button>
         <button class="btn btn-outline-secondary btn-sm disabled">
-          Page {{ page }} / {{ totalPages }}
+          {{ $t(`Page ${page} / ${totalPages}`) }}
         </button>
         <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
-          Next
+          {{ $t('Next') }}
         </button>
       </div>
     </div>
@@ -154,59 +164,26 @@
         :suppliers="suppliers"
         purchase-currency-symbol="¥"
         :sale-currency-symbol="companyCurrencySymbol"
-        :read-only="productForm.is_archived"
+        :read-only="productForm.is_archived || !canManageProducts"
+        :can-view-purchase-price="canViewPurchasePrice"
+        :can-edit-purchase-price="canEditPurchasePrice"
+        :can-view-cost-price="canViewCostPrice"
+        :can-view-cost-breakdown="canViewCostBreakdown"
+        :can-view-sale-price="canViewSalePrice"
+        :can-edit-sale-price="canEditCatalogSalePrice"
         @saved="onProductSaved"
         @reference-created="onReferenceCreated"
         @open-history="openHistory"
         @close="closeModal"
     />
-    <!-- History Modal -->
-    <div
-        class="modal fade history-modal"
-        :class="{ show: showHistoryModal }"
-        :style="showHistoryModal ? 'display: block;' : ''"
-        tabindex="-1"
-    >
-      <div class="modal-dialog modal-dialog-centered modal-lg">
-        <transition name="modal-fade">
-          <div class="modal-content" v-if="showHistoryContent">
-            <div class="modal-header">
-              <h5 class="modal-title">Change History</h5>
-              <button type="button" class="btn-close" @click="closeHistory"></button>
-            </div>
-            <div class="modal-body history-modal-body">
-              <table v-if="historyLogs.length" class="table table-striped">
-                <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>User</th>
-                  <th>Field</th>
-                  <th>From</th>
-                  <th>To</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr v-for="(log, idx) in historyLogs" :key="idx">
-                  <td>{{ log.changed_at }}</td>
-                  <td>{{ log.changed_by }}</td>
-                  <td>{{ historyFieldLabel(log) }}</td>
-                  <td>{{ historyOldValue(log) }}</td>
-                  <td>{{ historyNewValue(log) }}</td>
-                </tr>
-                </tbody>
-              </table>
-              <div v-else class="text-center text-muted py-4">
-                No changes found.
-              </div>
-            </div>
-            <div class="modal-footer">
-              <button class="btn btn-secondary" @click="closeHistory">Close</button>
-            </div>
-          </div>
-        </transition>
-      </div>
-    </div>
-    <div class="modal-backdrop fade history-backdrop" :class="{ show: showHistoryModal }"></div>
+    <ProductHistoryModal
+        :visible="showHistoryModal"
+        :product-id="productForm.id"
+        :categories="categories"
+        :units="units"
+        :suppliers="suppliers"
+        @close="closeHistory"
+    />
 
     <!-- Image Preview Modal -->
     <div
@@ -246,17 +223,30 @@
 
 <script>
 import axios from '../axios';
+import ChatShareButton from '../components/ChatShareButton.vue';
 import debounce from 'lodash/debounce';
 import AutocompleteInput from '../components/AutocompleteInput.vue';
 import ProductAddEditModal from '../components/ProductAddEditModal.vue';
-import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+import ProductHistoryModal from '../components/ProductHistoryModal.vue';
+import { clearCacheByPrefix, getCachedJson, setCachedJson } from '../utils/pageCache';
+import { accessState, hasPermission, PERMISSIONS, setCurrentUser } from '../access';
+import {
+  applyPaginatedData,
+  changeTablePage,
+  DEFAULT_PAGE_SIZE,
+  getCachedTablePage,
+  makeTableCacheKey,
+  pageMeta,
+  restoreTableStateSnapshot,
+  saveTableStateSnapshot,
+  setCachedTablePage,
+} from '../utils/tablePage';
 
 const TABLE_STATE_KEY = 'products-table-state';
-const PAGE_SIZE = 50;
 
 export default {
   name: 'ProductView',
-  components: { AutocompleteInput, ProductAddEditModal },
+  components: { ChatShareButton, AutocompleteInput, ProductAddEditModal, ProductHistoryModal },
   data() {
     return {
       products: [],
@@ -265,16 +255,14 @@ export default {
       units: [],
       suppliers: [],
       searchQuery: '',
-      filters: {category: '', supplierQuery: '', archiveStatus: 'active'},
+      filters: {categoryQuery: '', supplierQuery: '', archiveStatus: 'active'},
       page: 1,
-      pageSize: PAGE_SIZE,
+      pageSize: DEFAULT_PAGE_SIZE,
       totalCount: 0,
       isLoading: false,
       showModal: false,
       isEdit: false,
-      showHistoryContent: true,
       showHistoryModal: false,
-      historyLogs: [],
       imageModalUrl: null,
       toastMessage: '',
       toastTimer: null,
@@ -287,6 +275,11 @@ export default {
         supplier_id: null,
         purchase_price: 0,
         sale_price: 0,
+        cost_price: 0,
+        automatic_sale_price: 0,
+        sale_price_mode: 'automatic',
+        applied_markup_pct: null,
+        applied_markup_source: 'company',
         units_per_package: 1,
         weight_kg: 0,
         length_m: 0,
@@ -301,6 +294,11 @@ export default {
         archived_at: null,
         archived_by: null,
         has_history: false,
+        is_stock_item: false,
+        minimum_stock_level: '',
+        average_monthly_consumption: '',
+        consumption_calculation_mode: 'automatic',
+        purchase_batch_size: '',
       },
       systemSettings: null,
     };
@@ -309,21 +307,64 @@ export default {
     this.restoreTableState();
     this.fetchAll();
   },
+  watch: {
+    '$route.query.chatRecord': {
+      immediate: true,
+      async handler(value) {
+        if (!value || !/^\d+$/.test(String(value))) return;
+        try {
+          const { data } = await axios.get(`/api/products/${value}/`);
+          if (String(this.$route.query.chatRecord) === String(value)) this.editProduct(data);
+        } catch { alert('Товар недоступен или у вас нет прав на просмотр.'); }
+      },
+    },
+  },
   computed: {
     totalPages() {
-      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+      return pageMeta(this.page, this.totalCount, this.pageSize).totalPages;
     },
     pageStart() {
-      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageStart;
     },
     pageEnd() {
-      return Math.min(this.page * this.pageSize, this.totalCount);
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageEnd;
     },
     companyCurrencySymbol() {
       return this.systemSettings?.company_currency_symbol || this.systemSettings?.company_currency_code || '';
     },
     isCompanyAdmin() {
       return Boolean(this.currentUser?.is_company_admin);
+    },
+    canManageProducts() {
+      return hasPermission(PERMISSIONS.PRODUCTS_MANAGE, accessState.user);
+    },
+    canViewPurchasePrice() {
+      return hasPermission(PERMISSIONS.PURCHASE_PRICE_VIEW, accessState.user);
+    },
+    canEditPurchasePrice() {
+      return hasPermission(PERMISSIONS.PURCHASE_PRICE_MANAGE, accessState.user);
+    },
+    canViewCostPrice() {
+      return hasPermission(PERMISSIONS.COST_PRICE_VIEW, accessState.user);
+    },
+    canViewCostBreakdown() {
+      return hasPermission(PERMISSIONS.COMPANY_SETTINGS_MANAGE, accessState.user);
+    },
+    canViewSalePrice() {
+      return hasPermission(PERMISSIONS.SALE_PRICE_VIEW, accessState.user);
+    },
+    canEditCatalogSalePrice() {
+      return hasPermission(PERMISSIONS.CATALOG_SALE_PRICE_MANAGE, accessState.user);
+    },
+    canViewAnyProductPrice() {
+      return this.canViewPurchasePrice || this.canViewSalePrice;
+    },
+    productPriceHeader() {
+      if (this.canViewPurchasePrice && this.canViewSalePrice) return this.$t('Purchase / Sale Price');
+      return this.canViewPurchasePrice ? this.$t('Purchase Price') : this.$t('Sale Price');
+    },
+    productTableColumnCount() {
+      return this.canViewAnyProductPrice ? 7 : 6;
     },
   },
   methods: {
@@ -348,8 +389,9 @@ export default {
       ]);
     },
     async fetchCurrentUser() {
-      const { data } = await axios.get('/api/me/');
+      const { data } = await axios.get('/api/auth/me/');
       this.currentUser = data;
+      setCurrentUser(data);
     },
     async fetchSettings() {
       const res = await axios.get('/api/settings/');
@@ -357,7 +399,7 @@ export default {
     },
     async fetchProducts({ useCache = false } = {}) {
       const cacheKey = this.productsCacheKey();
-      const cached = useCache ? getCachedJson(cacheKey) : null;
+      const cached = getCachedTablePage(cacheKey, useCache);
       if (cached) {
         this.applyProductsResponse(cached);
       }
@@ -367,7 +409,7 @@ export default {
         const res = await axios.get('/api/products/', {
           params: this.productQueryParams()
         });
-        setCachedJson(cacheKey, res.data);
+        setCachedTablePage(cacheKey, res.data);
         this.applyProductsResponse(res.data);
       } catch (e) {
         console.error(e);
@@ -411,7 +453,7 @@ export default {
     },
     resetFilters() {
       this.searchQuery = '';
-      this.filters = {category: '', supplierQuery: '', archiveStatus: 'active'};
+      this.filters = {categoryQuery: '', supplierQuery: '', archiveStatus: 'active'};
       this.page = 1;
       this.saveTableState();
       this.fetchProducts();
@@ -421,45 +463,36 @@ export default {
         page: this.page,
         page_size: this.pageSize,
         search: this.searchQuery || undefined,
-        category: this.filters.category || undefined,
+        category_query: this.filters.categoryQuery || undefined,
         supplier_query: this.filters.supplierQuery || undefined,
         archive_status: this.filters.archiveStatus || 'active',
       };
     },
     productsCacheKey() {
-      return `products:${JSON.stringify(this.productQueryParams())}`;
+      return makeTableCacheKey('products', this.productQueryParams());
     },
     applyProductsResponse(data) {
-      const page = paginatedResults(data);
-      this.products = page.results;
-      this.totalCount = page.count;
+      applyPaginatedData(this, data, 'products');
     },
     saveTableState() {
-      setSavedState(TABLE_STATE_KEY, {
-        page: this.page,
-        searchQuery: this.searchQuery,
-        filters: this.filters,
-      });
+      saveTableStateSnapshot(TABLE_STATE_KEY, this);
     },
     restoreTableState() {
-      const state = getSavedState(TABLE_STATE_KEY, {
+      const state = restoreTableStateSnapshot(TABLE_STATE_KEY, {
         page: 1,
         searchQuery: '',
-        filters: {category: '', supplierQuery: '', archiveStatus: 'active'},
+        filters: {categoryQuery: '', supplierQuery: '', archiveStatus: 'active'},
       });
       this.page = state.page;
       this.searchQuery = state.searchQuery;
       this.filters = {
-        category: state.filters?.category || '',
+        categoryQuery: state.filters?.categoryQuery || '',
         supplierQuery: state.filters?.supplierQuery || '',
         archiveStatus: state.filters?.archiveStatus || 'active',
       };
     },
     changePage(page) {
-      if (page < 1 || page > this.totalPages || page === this.page) return;
-      this.page = page;
-      this.saveTableState();
-      this.fetchProducts({ useCache: true });
+      changeTablePage(this, page, 'fetchProducts');
     },
     openModal() {
       this.productForm = {
@@ -471,6 +504,11 @@ export default {
         supplier_id: null,
         purchase_price: 0,
         sale_price: 0,
+        cost_price: 0,
+        automatic_sale_price: 0,
+        sale_price_mode: 'automatic',
+        applied_markup_pct: null,
+        applied_markup_source: 'company',
         units_per_package: 1,
         weight_kg: 0,
         length_m: 0,
@@ -491,6 +529,11 @@ export default {
     },
     closeModal() {
       this.showModal = false;
+      if (this.$route.query.chatRecord) {
+        const query = { ...this.$route.query };
+        delete query.chatRecord;
+        this.$router.replace({ path: this.$route.path, query });
+      }
     },
     onProductSaved(product) {
       const idx = this.products.findIndex(x => x.id === product.id);
@@ -532,6 +575,11 @@ export default {
         supplier_id: item.supplier?.id || null,
         purchase_price: item.purchase_price,
         sale_price: item.sale_price,
+        cost_price: item.cost_price,
+        automatic_sale_price: item.automatic_sale_price,
+        sale_price_mode: item.sale_price_mode || 'automatic',
+        applied_markup_pct: item.applied_markup_pct,
+        applied_markup_source: item.applied_markup_source || 'company',
         units_per_package: item.units_per_package ?? 1,
         weight_kg: item.weight_kg ?? 0,
         length_m: item.length_m ?? 0,
@@ -546,6 +594,11 @@ export default {
         archived_at: item.archived_at || null,
         archived_by: item.archived_by || null,
         has_history: item.has_history || false,
+        is_stock_item: Boolean(item.is_stock_item),
+        minimum_stock_level: item.minimum_stock_level ?? '',
+        average_monthly_consumption: item.average_monthly_consumption ?? '',
+        consumption_calculation_mode: item.consumption_calculation_mode || 'automatic',
+        purchase_batch_size: item.purchase_batch_size ?? '',
       };
     },
     showToast(message) {
@@ -643,64 +696,10 @@ export default {
     },
     openHistory() {
       if (!this.isEdit) return;
-      axios.get(`/api/products/${this.productForm.id}/history/`)
-          .then(res => {
-            this.historyLogs = res.data;
-            this.showHistoryContent = true;
-            this.showHistoryModal = true;
-          });
+      this.showHistoryModal = true;
     },
     closeHistory() {
       this.showHistoryModal = false;
-      this.showHistoryContent = false;
-    },
-    fieldLabel(key) {
-      const map = {
-        name: 'Name',
-        sku: 'SKU',
-        description: 'Description',
-        category_id: 'Category',
-        unit_id: 'Unit',
-        supplier_id: 'Supplier',
-        purchase_price: 'Purchase Price',
-        sale_price: 'Sale Price',
-        image: 'Image',
-      };
-      return map[key] || key;
-    },
-    isArchiveLog(log) {
-      return log.field_name === 'is_archived';
-    },
-    historyFieldLabel(log) {
-      if (!this.isArchiveLog(log)) return this.fieldLabel(log.field_name);
-      return log.new_value === 'True' ? 'Archived' : 'Restored';
-    },
-    historyOldValue(log) {
-      return this.isArchiveLog(log) ? '—' : this.formatValue(log.field_name, log.old_value);
-    },
-    historyNewValue(log) {
-      return this.isArchiveLog(log) ? '—' : this.formatValue(log.field_name, log.new_value);
-    },
-
-    formatValue(field, val) {
-      if (field === 'category_id') {
-        const c = this.categories.find(x => String(x.id) === String(val));
-        return c ? c.name : '—';
-      }
-      if (field === 'unit_id') {
-        const u = this.units.find(x => String(x.id) === String(val));
-        return u ? u.name : '—';
-      }
-      if (field === 'supplier_id') {
-        const s = this.suppliers.find(x => String(x.id) === String(val));
-        return s ? s.name : '—';
-      }
-      if (field === 'image') {
-        // покажем только имя файла
-        return val ? val.split('/').pop() : '—';
-      }
-      // для чисел и остальных строк
-      return val != null && val !== '' ? val : '—';
     },
     showImage(url) {
       this.imageModalUrl = url;
@@ -748,7 +747,7 @@ export default {
 }
 
 .product-name-col {
-  min-width: 240px;
+  min-width: 170px;
 }
 
 .actions-col {
@@ -756,18 +755,25 @@ export default {
 }
 
 .actions-cell {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
   min-width: 250px;
 }
 
-.actions-cell .btn {
+.actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.actions-group .btn {
   white-space: nowrap;
 }
 
 .archived-product-row {
   color: #6c757d;
+}
+
+.table > tbody > tr.archived-product-row > * {
   background-color: #f8f9fa;
 }
 

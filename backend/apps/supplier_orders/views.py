@@ -1,3 +1,5 @@
+from core.order_analytics import analytics_response
+from core.order_reports import build_order_report
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import viewsets, status
 from rest_framework.exceptions import PermissionDenied
@@ -16,15 +18,20 @@ from .serializers import (
 )
 from core.pagination import StandardResultsSetPagination
 from core.order_documents import build_supplier_order_pdf
-import io
 from django.conf import settings
 from django.core.mail import EmailMessage
 from rest_framework import status
 from django.db.models import Q
-import pandas as pd
+from django.utils import timezone
 from django.http import FileResponse
 from customer_orders.services.create_supplier_orders import build_supplier_order_related_documents
-from warehouse.services import sync_supplier_order
+from warehouse.services import sync_customer_order, sync_supplier_order
+from users.access import user_has_permission
+
+
+def _require_permission(user, code):
+    if not user_has_permission(user, code):
+        raise PermissionDenied('You do not have permission to perform this action.')
 
 
 class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
@@ -33,13 +40,26 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     pagination_class = StandardResultsSetPagination
     permission_classes = [IsAuthenticated]
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        code = 'orders.supplier.view' if request.method in ('GET', 'HEAD', 'OPTIONS') else 'orders.supplier.manage'
+        _require_permission(request.user, code)
+
     def get_queryset(self):
         user_company = self.request.user.company
         queryset = SupplierOrder.objects.filter(
             company=user_company
         ).select_related(
-            'supplier', 'customer', 'status', 'customer_order'
+            'supplier', 'customer', 'status', 'company', 'customer_order', 'company'
         )
+
+        # Partition lists and exports; detail endpoints keep working for both kinds.
+        if self.action in ('list', 'export'):
+            is_sample = self.request.query_params.get('is_sample', '').lower() in ('true', '1')
+            queryset = queryset.filter(is_sample=is_sample)
+        trip_name = self.request.query_params.get('trip_name', '').strip()
+        if trip_name:
+            queryset = queryset.filter(trip_name__icontains=trip_name)
 
         search = self.request.query_params.get('search', '').strip()
         supplier_id = self.request.query_params.get('supplier')
@@ -50,12 +70,14 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 
         if search:
             queryset = queryset.filter(
+                Q(trip_name__icontains=search) |
                 Q(order_number__icontains=search) |
                 Q(supplier__name__icontains=search) |
                 Q(customer__name__icontains=search) |
                 Q(track_number__icontains=search) |
-                Q(shipping_code__icontains=search)
-            )
+                Q(shipping_code__icontains=search) |
+                Q(items__product__sku__icontains=search)
+            ).distinct()
         if supplier_id:
             queryset = queryset.filter(supplier_id=supplier_id)
         if supplier_query:
@@ -69,32 +91,22 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 
         return queryset
 
+    @action(detail=False, methods=['get'], url_path='analytics')
+    def analytics(self, request):
+        _require_permission(request.user, 'reports.financial.view')
+        return analytics_response(request, SupplierOrder, 'supplier')
+
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):
-        # 1) Получаем queryset (фильтры, права уже применены)
-        orders = self.get_queryset()
+        orders = self.filter_queryset(self.get_queryset())
+        buffer = build_order_report(
+            orders,
+            request.query_params,
+            request.user.company,
+            'supplier',
+            include_financial=user_has_permission(request.user, 'pricing.purchase.view'),
+        )
 
-        # 2) Собираем список словарей
-        data = []
-        for o in orders:
-            data.append({
-                'Order#': o.order_number,
-                'Customer': o.customer.name if o.customer else '',
-                'Supplier': o.supplier.name if o.supplier else '',
-                'Shipping Address': o.shipping_address,
-                'Shipment Time': o.shipment_date,
-                'Status': o.status.name if o.status else '',
-                'Code#': o.shipping_code,
-            })
-
-        # 3) pandas → Excel в память
-        df = pd.DataFrame(data)
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Orders')
-        buffer.seek(0)
-
-        # 4) Отдаём как attachment
         return FileResponse(
             buffer,
             as_attachment=True,
@@ -123,7 +135,14 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 
     @action(detail=True, methods=['post'])
     def send(self, request, pk=None):
+        _require_permission(request.user, 'pricing.purchase.manage')
         order = self.get_object()
+        if not order.items.exists():
+            return Response(
+                {'detail': 'Add at least one position before sending the order.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 
         # 1) Generate PDF in memory
         pdf_data = build_supplier_order_pdf(order)
@@ -149,12 +168,23 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
         email.attach(f"order_{order.id}.pdf", pdf_data, "application/pdf")
         email.send(fail_silently=False)
 
-        return Response({"status": "sent"}, status=status.HTTP_200_OK)
+        order.sent_at = timezone.now()
+        order.updated_by = request.user
+        order.save(update_fields=['sent_at', 'updated_by', 'updated_at'])
+
+        return Response(
+            {"status": "sent", "sent_at": order.sent_at},
+            status=status.HTTP_200_OK
+        )
 
     @action(detail=True, methods=['get'], url_path='related-documents')
     def related_documents(self, request, pk=None):
         order = self.get_object()
-        return Response(build_supplier_order_related_documents(order))
+        return Response(build_supplier_order_related_documents(
+            order,
+            include_customer_financial=user_has_permission(request.user, 'pricing.sale.view'),
+            include_supplier_financial=user_has_permission(request.user, 'pricing.purchase.view'),
+        ))
 
     def get_serializer_class(self):
         if self.action == 'history':
@@ -170,18 +200,38 @@ class SupplierOrderViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
             updated_by=self.request.user,
         )
         sync_supplier_order(order, self.request.user)
+        if order.customer_order_id:
+            sync_customer_order(order.customer_order, self.request.user)
 
     def perform_update(self, serializer):
         obj = self.get_object()
         order = serializer.save(updated_by=self.request.user)
         self.log_changes(obj, order)
         sync_supplier_order(order, self.request.user)
+        if order.customer_order_id:
+            sync_customer_order(order.customer_order, self.request.user)
+
+    def perform_destroy(self, instance):
+        customer_order = instance.customer_order
+        instance.delete()
+        sync_supplier_order(instance, self.request.user)
+        if customer_order:
+            sync_customer_order(customer_order, self.request.user)
 
 
 class SupplierOrderItemViewSet(viewsets.ModelViewSet):
     queryset = SupplierOrderItem.objects.all()
     serializer_class = SupplierOrderItemSerializer
     permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            _require_permission(request.user, 'orders.supplier.view')
+            return
+        _require_permission(request.user, 'orders.supplier.manage')
+        if request.method in ('POST', 'PUT', 'PATCH'):
+            _require_permission(request.user, 'pricing.purchase.manage')
 
     def get_queryset(self):
         user_company = self.request.user.company
@@ -197,15 +247,31 @@ class SupplierOrderItemViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         item = serializer.save()
         sync_supplier_order(item.order, self.request.user)
+        if item.order.customer_order_id:
+            sync_customer_order(item.order.customer_order, self.request.user)
 
     def perform_update(self, serializer):
+        old_price = serializer.instance.unit_price_cny
         item = serializer.save()
+        if old_price != item.unit_price_cny:
+            SupplierOrderChangeLog.objects.create(
+                supplier_order=item.order,
+                field_name='item_unit_price_cny',
+                old_value=f'{item.product.sku}: {old_price}',
+                new_value=f'{item.product.sku}: {item.unit_price_cny}',
+                changed_by=self.request.user,
+            )
         sync_supplier_order(item.order, self.request.user)
+        if item.order.customer_order_id:
+            sync_customer_order(item.order.customer_order, self.request.user)
 
     def perform_destroy(self, instance):
         order = instance.order
+        customer_order = order.customer_order
         instance.delete()
         sync_supplier_order(order, self.request.user)
+        if customer_order:
+            sync_customer_order(customer_order, self.request.user)
 
 
 class SupplierOrderStatusViewSet(viewsets.ModelViewSet):
@@ -215,6 +281,7 @@ class SupplierOrderStatusViewSet(viewsets.ModelViewSet):
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
+        _require_permission(request.user, 'orders.supplier.view')
         if request.method not in ('GET', 'HEAD', 'OPTIONS') and not request.user.is_company_admin:
             raise PermissionDenied('Only company admins can change statuses.')
 

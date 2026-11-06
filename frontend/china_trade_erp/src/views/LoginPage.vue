@@ -43,6 +43,7 @@
 
 <script>
 import axios, { AUTH_SESSION_KEY } from '../axios'
+import { firstAllowedRoute, loadCurrentUser } from '../access'
 
 export default {
   name: 'LoginPage',
@@ -74,8 +75,10 @@ export default {
         localStorage.removeItem('access_token')
         localStorage.removeItem('refresh_token')
         localStorage.setItem(AUTH_SESSION_KEY, '1')
+        sessionStorage.clear()
 
-        this.$router.push(this.$route.query.next || '/supplier-orders')
+        const user = await loadCurrentUser({force: true})
+        this.$router.push(this.$route.query.next || firstAllowedRoute(user))
       } catch (err) {
         this.serverError = err.response?.data?.detail || 'Login failed.'
       }

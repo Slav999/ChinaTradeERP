@@ -1,14 +1,10 @@
 <template>
   <div id="app">
     <NavBar v-if="!$route.meta.hideNav" />
-    <router-view />
+    <router-view :key="$route.meta.samples ? 'samples' : 'standard'" />
+    <CompanyChat v-if="!$route.meta.hideNav" />
 
-    <div
-      class="modal fade"
-      :class="{ show: showSettingsReminder }"
-      :style="showSettingsReminder ? 'display: block;' : ''"
-      tabindex="-1"
-    >
+    <div class="modal fade" :class="{ show: showSettingsReminder }" :style="showSettingsReminder ? 'display: block;' : ''" tabindex="-1">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content" v-if="showSettingsReminder">
           <div class="modal-header">
@@ -16,12 +12,8 @@
             <button type="button" class="btn-close" @click="dismissSettingsReminder"></button>
           </div>
           <div class="modal-body">
-            <p class="mb-2">
-              Thanks for using ChinaTradeERP. We filled the basic company settings from your business country.
-            </p>
-            <p class="text-muted mb-0">
-              Please check exchange rates, tax rate, and pricing settings so orders and product prices are calculated correctly.
-            </p>
+            <p class="mb-2">Thanks for using ChinaTradeERP. We filled the basic company settings from your business country.</p>
+            <p class="text-muted mb-0">Please check exchange rates, tax rate, and pricing settings so orders and product prices are calculated correctly.</p>
           </div>
           <div class="modal-footer">
             <button class="btn btn-outline-secondary" @click="dismissSettingsReminder">Later</button>
@@ -37,20 +29,21 @@
 <script>
 import axios, { AUTH_SESSION_KEY } from './axios'
 import NavBar from './components/NavBar.vue'
+import CompanyChat from './components/CompanyChat.vue'
+import { hasPermission, PERMISSIONS, setCurrentUser } from './access'
+import { installNotificationSound } from './utils/notificationSound'
 
 export default {
-  components: { NavBar },
+  components: { NavBar, CompanyChat },
   data() {
-    return {
-      showSettingsReminder: false,
-    }
+    return { showSettingsReminder: false, releaseNotificationSound: null }
   },
+  mounted() { this.releaseNotificationSound = installNotificationSound() },
+  beforeUnmount() { this.releaseNotificationSound?.() },
   watch: {
     '$route.fullPath': {
       immediate: true,
-      handler() {
-        this.maybeShowSettingsReminder()
-      },
+      handler() { this.maybeShowSettingsReminder() },
     },
   },
   methods: {
@@ -61,8 +54,9 @@ export default {
       }
       try {
         const { data } = await axios.get('/api/auth/me/')
-        if (!data.company_settings_needs_review) return
-        if (!this.canShowReminder()) return
+        setCurrentUser(data)
+        if (!hasPermission(PERMISSIONS.COMPANY_SETTINGS_MANAGE, data)) return
+        if (!data.company_settings_needs_review || !this.canShowReminder()) return
         this.showSettingsReminder = true
       } catch {
         this.showSettingsReminder = false
@@ -78,9 +72,7 @@ export default {
       localStorage.setItem('company_settings_reminder', JSON.stringify(state))
       return true
     },
-    dismissSettingsReminder() {
-      this.showSettingsReminder = false
-    },
+    dismissSettingsReminder() { this.showSettingsReminder = false },
     openCompanySettings() {
       this.showSettingsReminder = false
       this.$router.push({ path: '/profile', query: { settings: 'company' } })

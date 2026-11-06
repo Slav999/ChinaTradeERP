@@ -48,9 +48,9 @@
                   <div class="input-group">
                     <select v-model="form.category_id" class="form-select" :disabled="readOnly">
                       <option disabled value="">Select category...</option>
-                      <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                      <option v-for="c in categories" :key="c.id" :value="c.id">{{ $t(c.name) }}</option>
                     </select>
-                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="toggleQuickAdd('category')">+</button>
+                    <IconButton icon="plus-lg" variant="outline-primary" :title="$t('Create new item')" :disabled="readOnly" @click="toggleQuickAdd('category')" />
                   </div>
                   <div v-if="quickAdd.category" class="quick-add-row mt-2">
                     <input
@@ -69,9 +69,9 @@
                   <div class="input-group">
                     <select v-model="form.unit_id" class="form-select" :disabled="readOnly">
                       <option disabled value="">Select unit...</option>
-                      <option v-for="u in units" :key="u.id" :value="u.id">{{ u.name }}</option>
+                      <option v-for="u in units" :key="u.id" :value="u.id">{{ $t(u.name) }}</option>
                     </select>
-                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="toggleQuickAdd('unit')">+</button>
+                    <IconButton icon="plus-lg" variant="outline-primary" :title="$t('Create new item')" :disabled="readOnly" @click="toggleQuickAdd('unit')" />
                   </div>
                   <div v-if="quickAdd.unit" class="quick-add-row mt-2">
                     <input
@@ -92,14 +92,14 @@
                       <option disabled value="">Select supplier...</option>
                       <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
                     </select>
-                    <button type="button" class="btn btn-outline-primary quick-add-toggle" :disabled="readOnly" @click="openSupplierModal">+</button>
+                    <IconButton icon="plus-lg" variant="outline-primary" :title="$t('Create supplier')" :disabled="readOnly" @click="openSupplierModal" />
                   </div>
                 </div>
-                <div class="col-md-6">
+                <div v-if="canViewPurchasePrice" class="col-md-6">
                   <label class="form-label">Purchase Price</label>
                   <div class="input-group">
                     <span class="input-group-text">{{ purchaseCurrencySymbol }}</span>
-                    <input v-model.number="form.purchase_price" type="number" step="0.01" class="form-control" :disabled="readOnly"/>
+                    <input v-model.number="form.purchase_price" type="number" step="0.01" class="form-control" :disabled="readOnly || !canEditPurchasePrice"/>
                   </div>
                 </div>
                 <div class="col-md-6">
@@ -128,12 +128,94 @@
                     </label>
                   </div>
                 </div>
-                <div class="col-md-6">
-                  <label class="form-label">Sale Price</label>
+                <template v-if="form.is_stock_item">
+                  <div class="col-md-4">
+                    <label class="form-label">Minimum stock</label>
+                    <div class="input-group">
+                      <input
+                          v-model="form.minimum_stock_level"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          class="form-control"
+                          :disabled="readOnly"
+                          placeholder="Not configured"
+                      />
+                      <span class="input-group-text">{{ selectedUnitName }}</span>
+                    </div>
+                    <div class="form-text">The quantity that should remain available in the warehouse.</div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Consumption calculation</label>
+                    <select
+                        v-model="form.consumption_calculation_mode"
+                        class="form-select"
+                        :disabled="readOnly"
+                    >
+                      <option value="automatic">Automatic from shipments</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <div class="form-text">Automatic mode uses the history period configured for the company.</div>
+                  </div>
+                  <div v-if="form.consumption_calculation_mode === 'manual'" class="col-md-4">
+                    <label class="form-label">Average consumption per month</label>
+                    <div class="input-group">
+                      <input
+                          v-model="form.average_monthly_consumption"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          class="form-control"
+                          :disabled="readOnly"
+                          placeholder="0"
+                      />
+                      <span class="input-group-text">{{ selectedUnitName }}</span>
+                    </div>
+                    <div class="form-text">Used to forecast the balance by the next delivery.</div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Purchase batch</label>
+                    <div class="input-group">
+                      <input
+                          v-model="form.purchase_batch_size"
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          class="form-control"
+                          :disabled="readOnly"
+                          placeholder="Not configured"
+                      />
+                      <span class="input-group-text">{{ selectedUnitName }}</span>
+                    </div>
+                    <div class="form-text">Roll, box, or supplier lot used to round the suggested order.</div>
+                  </div>
+                </template>
+                <div v-if="canViewCostPrice" class="col-md-6">
+                  <label class="form-label">{{ $t('Cost price') }}</label>
+                  <div class="form-control-plaintext fw-semibold">
+                    {{ saleCurrencySymbol || '' }} {{ form.cost_price || 0 }}
+                  </div>
+                  <div v-if="canViewCostBreakdown" class="form-text">{{ $t('Calculated from purchase price, exchange rates, logistics, internal costs and packaging.') }}</div>
+                  <div v-if="canViewCostBreakdown && form.applied_markup_pct !== null && form.applied_markup_pct !== undefined" class="form-text">
+                    {{ $t('Applied markup') }}: {{ formatPercent(form.applied_markup_pct) }}
+                    ({{ form.applied_markup_source === 'category' ? $t('product category') : $t('company settings') }})
+                  </div>
+                </div>
+                <div v-if="canViewSalePrice" class="col-md-6">
+                  <label class="form-label">{{ $t('Sale Price') }}</label>
                   <div class="input-group sale-price-group">
                     <span class="input-group-text">{{ saleCurrencySymbol || '-' }}</span>
-                    <input v-model.number="form.sale_price" type="number" step="0.01" class="form-control sale-price-input" readonly/>
+                    <input
+                        v-model.number="form.sale_price"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        class="form-control sale-price-input"
+                        :readonly="readOnly || !canEditSalePrice"
+                    />
                   </div>
+                  <div v-if="canEditSalePrice" class="form-text">{{ $t('Clear the price to calculate it automatically.') }}</div>
+                  <div v-else class="form-text">{{ $t('Only a company administrator can change the sale price.') }}</div>
                 </div>
                 <div class="col-12">
                   <label class="form-label">Image</label>
@@ -146,6 +228,10 @@
             </form>
           </div>
           <div class="modal-footer justify-content-end">
+            <div v-if="initialProduct?.id" class="me-auto d-flex flex-wrap gap-2">
+              <ChatShareButton type="product" :record-id="Number(initialProduct.id)" :title="initialProduct.name" @shared="$emit('close')" />
+              <RelatedChatsButton type="product" :record-id="Number(initialProduct.id)" :title="initialProduct.name" @opened="$emit('close')" />
+            </div>
             <button class="btn btn-secondary" @click="$emit('close')">Cancel</button>
             <button v-if="!readOnly" class="btn btn-primary" @click="save">{{ isEdit ? 'Save' : 'Create' }}</button>
           </div>
@@ -204,7 +290,7 @@
                   <select v-model="supplierForm.status_id" class="form-select">
                     <option value="">No status</option>
                     <option v-for="status in counterpartyStatuses" :key="status.id" :value="status.id">
-                      {{ status.name }}
+                      {{ status.display_name || status.name }}
                     </option>
                   </select>
                 </div>
@@ -249,6 +335,9 @@
 
 <script>
 import axios from '../axios';
+import IconButton from './IconButton.vue';
+import ChatShareButton from './ChatShareButton.vue';
+import RelatedChatsButton from './RelatedChatsButton.vue';
 
 const emptySupplierForm = () => ({
   name: '',
@@ -266,6 +355,7 @@ const emptySupplierForm = () => ({
 
 export default {
   name: 'ProductAddEditModal',
+  components: { IconButton, ChatShareButton, RelatedChatsButton },
   props: {
     visible: {type: Boolean, default: false},
     initialProduct: {type: Object, default: null},
@@ -275,6 +365,12 @@ export default {
     purchaseCurrencySymbol: {type: String, default: '¥'},
     saleCurrencySymbol: {type: String, default: ''},
     readOnly: {type: Boolean, default: false},
+    canViewPurchasePrice: {type: Boolean, default: false},
+    canEditPurchasePrice: {type: Boolean, default: false},
+    canViewCostPrice: {type: Boolean, default: false},
+    canViewCostBreakdown: {type: Boolean, default: false},
+    canViewSalePrice: {type: Boolean, default: false},
+    canEditSalePrice: {type: Boolean, default: false},
   },
   data() {
     return {
@@ -384,8 +480,12 @@ export default {
       return {
         name: '', sku: '', category_id: null, unit_id: null,
         supplier_id: null,
-        purchase_price: 0, sale_price: 0,
+        purchase_price: 0, cost_price: 0, sale_price: 0,
+        automatic_sale_price: 0, sale_price_mode: 'automatic',
+        applied_markup_pct: null, applied_markup_source: 'company',
         is_stock_item: false,
+        minimum_stock_level: '', average_monthly_consumption: '',
+        consumption_calculation_mode: 'automatic', purchase_batch_size: '',
         units_per_package: 1, weight_kg: 0,
         length_m: 0, width_m: 0, height_m: 0,
         image: null,
@@ -416,10 +516,24 @@ export default {
         alert('Please select a supplier');
         return false;
       }
-      if (!this.form.weight_kg || Number(this.form.weight_kg) <= 0) {
-        return confirm(
-          'Weight per unit is empty. The product will be saved, but sale price will not be calculated. Continue?'
-        );
+      for (const field of ['minimum_stock_level', 'average_monthly_consumption', 'purchase_batch_size']) {
+        const value = this.form[field];
+        const minimum = field === 'purchase_batch_size' ? 0.01 : 0;
+        if (value !== '' && value !== null && Number(value) < minimum) {
+          alert('Warehouse control quantities must be valid positive values.');
+          return false;
+        }
+      }
+      const salePriceEmpty = this.form.sale_price === '' || this.form.sale_price === null;
+      if (!salePriceEmpty && Number(this.form.sale_price) < 0) {
+        alert(this.$t('Sale price cannot be negative.'));
+        return false;
+      }
+      if (
+        salePriceEmpty
+        && (!this.form.weight_kg || Number(this.form.weight_kg) <= 0)
+      ) {
+        return confirm(this.$t('Weight per unit is empty. Cost and automatic sale price will remain zero. Continue?'));
       }
       return true;
     },
@@ -447,15 +561,28 @@ export default {
     async save() {
       if (!this.validateForm()) return;
       const fd = new FormData();
+      const salePriceEmpty = this.form.sale_price === '' || this.form.sale_price === null;
+      const automaticPrice = Number(this.form.automatic_sale_price || 0);
+      const enteredPrice = Number(this.form.sale_price || 0);
+      const useAutomaticPrice = salePriceEmpty || (
+        this.form.sale_price_mode === 'automatic' && enteredPrice === automaticPrice
+      );
       Object.entries(this.form).forEach(([k, v]) => {
         if ([
           'id', 'category', 'unit', 'supplier',
           'is_archived', 'archived_at', 'archived_by',
           'created_at', 'created_by', 'updated_at', 'updated_by',
+          'cost_price', 'automatic_sale_price',
+          'applied_markup_pct', 'applied_markup_source',
         ].includes(k)) return;
-        if (k === 'sale_price') return;
+        if (k === 'sale_price' || k === 'sale_price_mode') return;
+        if (k === 'purchase_price' && !this.canEditPurchasePrice) return;
         if (v !== null && v !== undefined) fd.append(k, v);
       });
+      if (this.canEditSalePrice) {
+        fd.append('sale_price_mode', useAutomaticPrice ? 'automatic' : 'manual');
+        if (!useAutomaticPrice) fd.append('sale_price', this.form.sale_price);
+      }
       try {
         let res;
         const cfg = {headers: {'Content-Type': 'multipart/form-data'}};
@@ -482,10 +609,17 @@ export default {
     formatDate(val) {
       return val ? new Date(val).toLocaleString() : '—';
     },
+    formatPercent(value) {
+      const percent = Number(value) * 100;
+      return Number.isFinite(percent) ? `${percent.toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : '—';
+    },
   },
   computed: {
     isEdit() {
       return Boolean(this.initialProduct && this.initialProduct.id);
+    },
+    selectedUnitName() {
+      return this.units.find(unit => Number(unit.id) === Number(this.form.unit_id))?.name || 'unit';
     }
   },
   watch: {
@@ -566,6 +700,9 @@ export default {
   border-color: #f1d48a;
   color: #2f3f50;
   cursor: default;
+}
+.sale-price-input:not([readonly]) {
+  cursor: text;
 }
 .sale-price-input:focus {
   background-color: #fff8e1;

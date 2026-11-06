@@ -65,7 +65,7 @@
           <div v-for="field in contactFields" :key="field.key" class="profile-field">
             <div class="field-label">{{ field.label }}</div>
             <div :class="['field-value', { empty: !field.value }]">
-              {{ field.value || 'not filled' }}
+              {{ field.value || $t('not filled') }}
             </div>
           </div>
         </div>
@@ -150,7 +150,7 @@
                       <input v-model.trim="form.position" class="form-control" />
                     </div>
                     <div class="col-md-4">
-                      <label class="form-label">Notification language</label>
+                      <label class="form-label">Interface language</label>
                       <select v-model="form.notification_language" class="form-select">
                         <option value="ru">Russian</option>
                         <option value="en">English</option>
@@ -193,7 +193,7 @@
           <div class="modal-header">
             <div>
               <h5 class="modal-title">Invite employee</h5>
-              <div class="text-muted small">Add an employee to {{ profile.company_name || 'your company' }}</div>
+          <div class="text-muted small">{{ $t('Add an employee to') }} {{ profile.company_name || $t('your company') }}</div>
             </div>
             <button type="button" class="btn-close" aria-label="Close" @click="closeInviteModal"></button>
           </div>
@@ -218,11 +218,6 @@
 
               <div v-if="inviteModalTab === 'invite'">
               <div class="row gy-3">
-                <div class="col-md-6">
-                  <label class="form-label">Employee email</label>
-                  <input v-model.trim="invitationForm.email" type="email" class="form-control" required />
-                  <div class="form-text">An existing account can be invited to another company.</div>
-                </div>
                 <div class="col-md-3">
                   <label class="form-label">First name</label>
                   <input v-model.trim="invitationForm.first_name" class="form-control" />
@@ -231,34 +226,27 @@
                   <label class="form-label">Last name</label>
                   <input v-model.trim="invitationForm.last_name" class="form-control" />
                 </div>
-                <div class="col-md-4">
-                  <label class="form-label">System role</label>
-                  <select v-model="invitationForm.role" class="form-select">
-                    <option value="viewer">Viewer</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
-                  </select>
+                <div class="col-md-6">
+                  <label class="form-label">Employee email</label>
+                  <input v-model.trim="invitationForm.email" type="email" class="form-control" required />
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-6">
                   <label class="form-label">Access role</label>
-                  <select v-model="invitationForm.access_role" class="form-select">
-                    <option value="">Select role...</option>
+                  <select v-model="invitationForm.access_role" class="form-select" required>
+                    <option disabled value="">{{ $t('Select role...') }}</option>
                     <option v-for="role in accessRoles" :key="role.id" :value="role.id">
-                      {{ role.name }}
+                      {{ systemRoleName(role.name) }}
                     </option>
                   </select>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-6">
                   <label class="form-label">Department</label>
-                  <input
-                      v-model.trim="invitationForm.department_name"
-                      class="form-control"
-                      list="department-options"
-                      placeholder="Type or select"
-                  />
-                  <datalist id="department-options">
-                    <option v-for="department in departments" :key="department.id" :value="department.name" />
-                  </datalist>
+                  <select v-model="invitationForm.department" class="form-select" data-i18n-skip>
+                    <option :value="null">{{ $t('No department') }}</option>
+                    <option v-for="department in departments" :key="department.id" :value="department.id">
+                      {{ departmentName(department) }}
+                    </option>
+                  </select>
                 </div>
                 <div class="col-12">
                   <label class="form-label">Position</label>
@@ -268,7 +256,7 @@
               </div>
 
               <div v-if="inviteModalTab === 'invite' && invitationSuccess" class="alert alert-success mt-3 mb-0">
-                {{ invitationSuccess }}
+                {{ $t(invitationSuccess) }}
               </div>
               <div v-if="inviteModalTab === 'invite' && invitationError" class="alert alert-danger mt-3 mb-0">
                 {{ invitationError }}
@@ -286,14 +274,20 @@
                   <div>
                     <div class="fw-semibold">{{ invitation.email }}</div>
                     <div class="text-muted small">
-                      {{ invitation.access_role_display || invitation.role }}
-                      <span v-if="invitation.department_display"> / {{ invitation.department_display }}</span>
+                      {{ systemRoleName(invitation.access_role_display || invitation.role) }}
+                      <span v-if="invitation.department_display"> / {{ departmentName({ name: invitation.department_display, translations: invitation.department_translations }) }}</span>
                       <span v-if="invitation.position"> / {{ invitation.position }}</span>
                     </div>
                   </div>
-                  <span :class="['badge', invitation.status === 'pending' ? 'text-bg-warning' : 'text-bg-light']">
-                    {{ invitation.status }}
-                  </span>
+                  <div class="d-flex align-items-center flex-wrap gap-2">
+                    <span class="text-muted small">{{ $t('Expires at') }}: {{ formatDateTime(invitation.expires_at) }}</span>
+                    <IconButton icon="arrow-clockwise" size="sm" :title="$t('Resend invitation')"
+                      :disabled="Boolean(invitationAction) || isSendingInvitation"
+                      @click="manageInvitation(invitation, 'resend')" />
+                    <IconButton icon="x-circle" size="sm" variant="outline-danger" :title="$t('Revoke invitation')"
+                      :disabled="Boolean(invitationAction) || isSendingInvitation"
+                      @click="manageInvitation(invitation, 'revoke')" />
+                  </div>
                 </div>
               </div>
 
@@ -306,95 +300,118 @@
                         :class="['btn', employeeStatusFilter === 'active' ? 'btn-primary' : 'btn-outline-primary']"
                         @click="setEmployeeStatusFilter('active')"
                     >
-                      Active
+                      {{ $t('Active employees') }}
                     </button>
                     <button
                         type="button"
                         :class="['btn', employeeStatusFilter === 'disabled' ? 'btn-primary' : 'btn-outline-primary']"
                         @click="setEmployeeStatusFilter('disabled')"
                     >
-                      Dismissed
+                      {{ $t('Dismissed employees') }}
                     </button>
                   </div>
                 </div>
 
                 <div v-if="isLoadingEmployees" class="text-muted small">Loading employees...</div>
                 <div v-else-if="!employees.length" class="text-muted small">No employees in this list.</div>
-                <div
-                    v-for="employee in employees"
-                    :key="employee.id"
-                    :class="['employee-item', { selected: selectedEmployee?.id === employee.id }]"
-                    @click="selectEmployee(employee)"
-                >
-                  <div class="employee-main">
-                    <div class="fw-semibold">{{ employeeName(employee) }}</div>
-                    <div class="text-muted small">{{ employee.email }}</div>
-                    <div class="text-muted small">
-                      {{ employee.access_role_name || employee.role_display || employee.role }}
-                      <span v-if="employee.department_name"> / {{ employee.department_name }}</span>
-                      <span v-if="employee.position"> / {{ employee.position }}</span>
-                    </div>
-                    <div v-if="employee.status === 'disabled'" class="text-muted small">
-                      Dismissed {{ formatDate(employee.disabled_at) }}
-                      <span v-if="employee.disabled_by_email"> by {{ employee.disabled_by_email }}</span>
-                    </div>
-                  </div>
-                  <div class="employee-actions">
-                    <span :class="['badge', employee.status === 'active' ? 'text-bg-success' : 'text-bg-secondary']">
-                      {{ employee.status }}
-                    </span>
+                <div v-for="employee in employees" :key="employee.id" class="employee-entry">
+                  <div
+                      :class="['employee-item', { selected: selectedEmployee?.id === employee.id }]"
+                  >
                     <button
-                        v-if="employee.can_dismiss"
                         type="button"
-                        class="btn btn-sm btn-outline-danger"
-                        :disabled="isDismissingEmployee === employee.id"
-                        @click.stop="dismissEmployee(employee)"
+                        class="employee-main employee-toggle"
+                        :aria-expanded="selectedEmployee?.id === employee.id"
+                        :aria-controls="`employee-detail-${employee.id}`"
+                        @click="selectEmployee(employee)"
                     >
-                      {{ isDismissingEmployee === employee.id ? 'Dismissing...' : 'Dismiss' }}
+                      <div class="fw-semibold">{{ employeeName(employee) }}</div>
+                      <div class="text-muted small">{{ employee.email }}</div>
+                      <div class="text-muted small">
+                        {{ systemRoleName(employee.access_role_name || employee.role_display || employee.role) }}
+                        <span v-if="employee.department_name"> / {{ departmentName({ name: employee.department_name, translations: employee.department_translations }) }}</span>
+                        <span v-if="employee.position"> / {{ employee.position }}</span>
+                      </div>
+                      <div v-if="employee.status === 'disabled'" class="text-muted small">
+                        {{ $t('Dismissed on') }} {{ formatDate(employee.disabled_at) }}
+                        <span v-if="employee.disabled_by_email"> {{ $t('by') }} {{ employee.disabled_by_email }}</span>
+                      </div>
                     </button>
+                    <div class="employee-actions">
+                      <span :class="['badge', employee.status === 'active' ? 'text-bg-success' : 'text-bg-secondary']">
+                        {{ $t(employee.status) }}
+                      </span>
+                      <button
+                          v-if="employee.can_dismiss"
+                          type="button"
+                          class="btn btn-sm btn-outline-danger"
+                          :disabled="isDismissingEmployee === employee.id"
+                          @click.stop="dismissEmployee(employee)"
+                      >
+                        {{ isDismissingEmployee === employee.id ? $t('Dismissing...') : $t('Dismiss') }}
+                      </button>
+                      <IconButton :icon="selectedEmployee?.id === employee.id ? 'chevron-up' : 'chevron-down'"
+                        size="sm" :title="selectedEmployee?.id === employee.id ? $t('Collapse employee details') : $t('Expand employee details')"
+                        :aria-expanded="selectedEmployee?.id === employee.id" :aria-controls="`employee-detail-${employee.id}`"
+                        @click="selectEmployee(employee)" />
+                    </div>
                   </div>
-                </div>
 
-                <div v-if="selectedEmployee" class="employee-detail-panel">
-                  <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
-                    <div>
-                      <h6 class="mb-1">{{ employeeName(selectedEmployee) }}</h6>
-                      <div class="text-muted small">{{ selectedEmployee.email }}</div>
+                  <div v-if="selectedEmployee?.id === employee.id" :id="`employee-detail-${employee.id}`" class="employee-detail-panel">
+                    <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
+                      <div>
+                        <h6 class="mb-1">{{ employeeName(selectedEmployee) }}</h6>
+                        <div class="text-muted small">{{ selectedEmployee.email }}</div>
+                      </div>
                     </div>
-                    <button type="button" class="btn-close" aria-label="Close" @click="selectedEmployee = null"></button>
-                  </div>
-                  <div class="employee-detail-grid">
-                    <div>
-                      <div class="field-label">Phone</div>
-                      <div class="field-value">{{ selectedEmployee.phone || 'not filled' }}</div>
-                    </div>
-                    <div>
-                      <div class="field-label">Work email</div>
-                      <div class="field-value">{{ selectedEmployee.work_email || 'not filled' }}</div>
-                    </div>
-                    <div>
-                      <div class="field-label">Personal email</div>
-                      <div class="field-value">{{ selectedEmployee.personal_email || 'not filled' }}</div>
-                    </div>
-                    <div>
-                      <div class="field-label">Role</div>
-                      <div class="field-value">{{ selectedEmployee.access_role_name || selectedEmployee.role_display || selectedEmployee.role }}</div>
-                    </div>
-                    <div>
-                      <div class="field-label">Department</div>
-                      <div class="field-value">{{ selectedEmployee.department_name || 'not filled' }}</div>
-                    </div>
-                    <div>
-                      <div class="field-label">Position</div>
-                      <div class="field-value">{{ selectedEmployee.position || 'not filled' }}</div>
-                    </div>
-                    <div v-if="selectedEmployee.status === 'disabled'">
-                      <div class="field-label">Dismissed at</div>
-                      <div class="field-value">{{ formatDate(selectedEmployee.disabled_at) || 'not filled' }}</div>
-                    </div>
-                    <div v-if="selectedEmployee.status === 'disabled'">
-                      <div class="field-label">Reason</div>
-                      <div class="field-value">{{ selectedEmployee.disable_reason || 'not filled' }}</div>
+                    <div class="employee-detail-grid">
+                      <div>
+                        <div class="field-label">Phone</div>
+                        <div class="field-value">{{ selectedEmployee.phone || $t('not filled') }}</div>
+                      </div>
+                      <div>
+                        <div class="field-label">Work email</div>
+                        <div class="field-value">{{ selectedEmployee.work_email || $t('not filled') }}</div>
+                      </div>
+                      <div>
+                        <div class="field-label">Personal email</div>
+                        <div class="field-value">{{ selectedEmployee.personal_email || $t('not filled') }}</div>
+                      </div>
+                      <div class="employee-role-field">
+                        <div class="field-label">Role</div>
+                        <div v-if="selectedEmployee.status === 'active'" class="d-flex align-items-center gap-2">
+                          <select v-model="selectedEmployeeRoleId" class="form-select form-select-sm">
+                            <option v-for="role in accessRoles" :key="role.id" :value="role.id">
+                              {{ systemRoleName(role.name) }}
+                            </option>
+                          </select>
+                          <button
+                              type="button"
+                              class="btn btn-sm btn-outline-primary"
+                              :disabled="isSavingEmployeeRole || !employeeRoleChanged"
+                              @click="saveEmployeeRole"
+                          >
+                            {{ isSavingEmployeeRole ? $t('Saving...') : $t('Save') }}
+                          </button>
+                        </div>
+                        <div v-else class="field-value">{{ systemRoleName(selectedEmployee.access_role_name || selectedEmployee.role_display || selectedEmployee.role) }}</div>
+                      </div>
+                      <div>
+                        <div class="field-label">Department</div>
+                        <div class="field-value">{{ departmentName({ name: selectedEmployee.department_name, translations: selectedEmployee.department_translations }) || $t('not filled') }}</div>
+                      </div>
+                      <div>
+                        <div class="field-label">Position</div>
+                        <div class="field-value">{{ selectedEmployee.position || $t('not filled') }}</div>
+                      </div>
+                      <div v-if="selectedEmployee.status === 'disabled'">
+                        <div class="field-label">{{ $t('Dismissed at') }}</div>
+                        <div class="field-value">{{ formatDate(selectedEmployee.disabled_at) || $t('not filled') }}</div>
+                      </div>
+                      <div v-if="selectedEmployee.status === 'disabled'">
+                        <div class="field-label">Reason</div>
+                        <div class="field-value">{{ selectedEmployee.disable_reason || $t('not filled') }}</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -405,7 +422,7 @@
               <button
                   v-if="inviteModalTab === 'invite'"
                   class="btn btn-primary px-4"
-                  :disabled="isSendingInvitation"
+                  :disabled="isSendingInvitation || Boolean(invitationAction)"
               >
                 {{ isSendingInvitation ? 'Sending...' : 'Send invitation' }}
               </button>
@@ -428,7 +445,7 @@
             <div class="modal-header">
               <div>
                 <h5 class="modal-title">Company settings</h5>
-                <div class="text-muted small">Pricing settings for {{ profile.company_name || 'your company' }}</div>
+              <div class="text-muted small">{{ $t('Pricing settings for') }} {{ profile.company_name || $t('your company') }}</div>
               </div>
               <button type="button" class="btn-close" aria-label="Close" @click="closeSettingsModal"></button>
             </div>
@@ -484,6 +501,13 @@
                     <h6 class="mb-0">Company details for documents</h6>
                   </div>
                   <div class="col-md-4">
+                    <label class="form-label">Company language</label>
+                    <select v-model="settingsForm.company_language_code" class="form-select">
+                      <option value="ru">Russian</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
                     <label class="form-label">Company logo</label>
                     <input type="file" accept="image/*" class="form-control" @change="handleCompanyLogoChange" />
                     <div v-if="companyLogoPreview || settingsForm.company_logo_url" class="company-logo-preview mt-2">
@@ -503,8 +527,63 @@
                     <textarea v-model.trim="settingsForm.company_address" class="form-control" rows="2"></textarea>
                   </div>
                   <div class="col-md-6">
+                    <label class="form-label">China warehouse address</label>
+                    <textarea v-model.trim="settingsForm.company_china_warehouse_address" class="form-control" rows="2"></textarea>
+                  </div>
+                  <div class="col-md-6">
                     <label class="form-label">Bank details</label>
                     <textarea v-model.trim="settingsForm.company_bank_details" class="form-control" rows="2"></textarea>
+                  </div>
+                  <div class="col-12">
+                    <hr class="my-2" />
+                    <h6 class="mb-0">Warehouse stock control</h6>
+                    <div class="form-text">Each warehouse product can use a manual monthly value or an automatic value calculated from actual shipments.</div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Average delivery lead, calendar days</label>
+                    <input v-model.number="settingsForm.stock_delivery_lead_days" type="number" min="1" max="365" class="form-control" required />
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Automatic consumption history</label>
+                    <select v-model.number="settingsForm.stock_consumption_history_days" class="form-select" required>
+                      <option :value="30">30 days — reacts faster</option>
+                      <option :value="90">90 days — recommended</option>
+                      <option :value="180">180 days — more stable</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Company time zone</label>
+                    <select v-model="settingsForm.stock_timezone" class="form-select" required>
+                      <option v-for="zone in timezoneOptions" :key="zone" :value="zone">{{ zone }}</option>
+                    </select>
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check form-switch">
+                      <input
+                          id="stock-weekly-control-enabled"
+                          v-model="settingsForm.stock_weekly_control_enabled"
+                          class="form-check-input"
+                          type="checkbox"
+                      />
+                      <label class="form-check-label" for="stock-weekly-control-enabled">Weekly warehouse stock notification</label>
+                    </div>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Notification day</label>
+                    <select v-model.number="settingsForm.stock_notification_weekday" class="form-select" :disabled="!settingsForm.stock_weekly_control_enabled">
+                      <option :value="0">Monday</option>
+                      <option :value="1">Tuesday</option>
+                      <option :value="2">Wednesday</option>
+                      <option :value="3">Thursday</option>
+                      <option :value="4">Friday</option>
+                      <option :value="5">Saturday</option>
+                      <option :value="6">Sunday</option>
+                    </select>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Notification time</label>
+                    <input v-model="settingsForm.stock_notification_time" type="time" class="form-control" :disabled="!settingsForm.stock_weekly_control_enabled" />
+                    <div class="form-text">The notification is created on the first app activity after this time.</div>
                   </div>
                   <div class="col-12">
                     <hr class="my-2" />
@@ -539,7 +618,7 @@
                     <input v-model="settingsForm.packaging_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-md-6">
-                    <label class="form-label">Margin, %</label>
+                    <label class="form-label">{{ $t('Markup, %') }}</label>
                     <input v-model="settingsForm.margin_pct" type="number" step="0.01" min="0" class="form-control" required />
                   </div>
                   <div class="col-12">
@@ -552,35 +631,69 @@
                     class="col-md-6"
                   >
                     <div class="directory-box">
-                      <label class="form-label">{{ directory.label }}</label>
+                      <label class="form-label">{{ $t(directory.label) }}</label>
                       <div class="input-group directory-input-group mb-2">
                         <select
                           :value="directory.selectedId"
                           class="form-select"
+                          data-i18n-skip
                           @change="selectSettingsDirectory(directory.type, $event.target.value)"
                         >
-                          <option disabled value="">Select...</option>
+                          <option disabled value="">{{ $t('Select...') }}</option>
                           <option v-for="item in directory.items" :key="item.id" :value="item.id">
-                            {{ item.name }}
+                            {{ directoryItemName(directory.type, item) }}{{ item.is_archived ? ` (${$t('Archived')})` : '' }}
                           </option>
                         </select>
-                        <button
-                          type="button"
-                          class="btn btn-outline-danger directory-delete"
+                        <IconButton
+                          icon="plus-lg"
+                          variant="outline-primary"
+                          :title="$t('Create new item')"
+                          @click="startNewSettingsDirectory(directory.type)"
+                        />
+                        <IconButton v-if="directory.type === 'department'"
+                          :icon="selectedSettingsDirectoryItem('department')?.is_archived ? 'arrow-counterclockwise' : 'archive'"
+                          :title="selectedSettingsDirectoryItem('department')?.is_archived ? $t('Restore department') : $t('Archive department')"
+                          :disabled="!selectedSettingsDirectoryItem('department') || Boolean(isDeletingReference)"
+                          @click="toggleDepartmentArchive" />
+                        <IconButton v-else
+                          icon="trash"
+                          variant="outline-danger"
                           :disabled="!selectedSettingsDirectoryItem(directory.type) || isDeletingReference === `${directory.type}-${directory.selectedId}`"
                           @click="deleteSettingsReference(directory.type, selectedSettingsDirectoryItem(directory.type))"
-                          title="Delete selected item"
-                        >
-                          x
-                        </button>
+                          :title="$t('Delete selected item')"
+                        />
                       </div>
-                      <div class="directory-edit-grid">
+                      <div class="form-text mb-2">
+                        {{ selectedSettingsDirectoryItem(directory.type) ? $t('Editing selected item') : $t('Creating new item') }}
+                      </div>
+                      <div class="directory-edit-grid" :class="{ 'directory-edit-grid-status': directory.isStatus || directory.isTranslated }">
                         <input
+                          v-if="!directory.isStatus && !directory.isTranslated"
                           v-model.trim="settingsDirectoryForms[directory.type].name"
                           type="text"
                           class="form-control form-control-sm"
                           placeholder="Name"
                         />
+                        <template v-else>
+                          <div>
+                            <label class="form-label small mb-1">{{ $t('Russian name') }}</label>
+                            <input
+                              v-model.trim="settingsDirectoryForms[directory.type].translations.ru"
+                              type="text"
+                              class="form-control form-control-sm"
+                              :placeholder="$t('Russian name')"
+                            />
+                          </div>
+                          <div>
+                            <label class="form-label small mb-1">{{ $t('English name') }}</label>
+                            <input
+                              v-model.trim="settingsDirectoryForms[directory.type].translations.en"
+                              type="text"
+                              class="form-control form-control-sm"
+                              :placeholder="$t('English name')"
+                            />
+                          </div>
+                        </template>
                         <input
                           v-if="directory.hasColor"
                           v-model="settingsDirectoryForms[directory.type].color"
@@ -595,25 +708,27 @@
                           step="0.01"
                           min="0"
                           class="form-control form-control-sm"
-                          placeholder="Margin, %"
+                          :placeholder="$t('Markup, %')"
                         />
                       </div>
-                      <div class="d-flex gap-2 mt-2">
+                      <div class="d-flex mt-2">
                         <button
+                          v-if="!selectedSettingsDirectoryItem(directory.type)"
                           type="button"
-                          class="btn btn-outline-secondary btn-sm flex-fill"
-                          :disabled="!settingsDirectoryForms[directory.type].name"
+                          class="btn btn-primary btn-sm flex-fill"
+                          :disabled="!directoryFormHasName(directory.type)"
                           @click="createSettingsDirectory(directory.type)"
                         >
-                          Add
+                          {{ $t('Add new item') }}
                         </button>
                         <button
+                          v-else
                           type="button"
                           class="btn btn-outline-primary btn-sm flex-fill"
-                          :disabled="!selectedSettingsDirectoryItem(directory.type) || !settingsDirectoryForms[directory.type].name"
+                          :disabled="!directoryFormHasName(directory.type)"
                           @click="updateSettingsDirectory(directory.type)"
                         >
-                          Save
+                          {{ $t('Save changes') }}
                         </button>
                       </div>
                     </div>
@@ -621,7 +736,7 @@
                 </div>
 
                 <div v-if="settingsSuccess" class="alert alert-success mt-3 mb-0">
-                  {{ settingsSuccess }}
+                  {{ $t(settingsSuccess) }}
                 </div>
                 <div v-if="settingsError" class="alert alert-danger mt-3 mb-0">
                   {{ settingsError }}
@@ -651,11 +766,23 @@
 <script>
 import axios, { clearClientSession } from '../axios';
 import { clearCacheByPrefix } from '../utils/pageCache';
+import IconButton from '../components/IconButton.vue';
+import { languageState } from '../i18n';
+import { setCurrentUser } from '../access';
 
 const API_ORIGIN = 'http://localhost:8000';
+const SYSTEM_DIRECTORY_NAMES = {
+  category: new Set(['General']),
+  unit: new Set(['pcs', 'kg', 'g', 'm', 'm2', 'm3', 'box', 'set']),
+  counterpartyStatus: new Set(['New', 'Active', 'Blocked']),
+  customerOrderStatus: new Set(['New', 'In progress', 'Shipped', 'Completed', 'Cancelled']),
+  supplierOrderStatus: new Set(['New', 'In production', 'In transit', 'Received', 'Cancelled']),
+};
+const SYSTEM_ROLE_NAMES = new Set(['Company admin', 'WED manager', 'Purchasing manager', 'Sales manager', 'Financial analyst', 'Warehouse manager', 'Viewer']);
 
 export default {
   name: 'ProfilePage',
+  components: { IconButton },
   data() {
     return {
       profile: {},
@@ -669,9 +796,8 @@ export default {
         email: '',
         first_name: '',
         last_name: '',
-        role: 'viewer',
         access_role: '',
-        department_name: '',
+        department: null,
         position: '',
       },
       invitations: [],
@@ -684,6 +810,7 @@ export default {
       highlightedSettingsCountryIndex: 0,
       settingsForm: {
         business_country: '',
+        company_language_code: 'ru',
         company_currency_code: '',
         company_currency_symbol: '',
         cny_to_local_rate: '',
@@ -699,7 +826,14 @@ export default {
         company_work_email: '',
         company_phone: '',
         company_address: '',
+        company_china_warehouse_address: '',
         company_bank_details: '',
+        stock_delivery_lead_days: 30,
+        stock_consumption_history_days: 90,
+        stock_timezone: 'Asia/Almaty',
+        stock_weekly_control_enabled: true,
+        stock_notification_weekday: 0,
+        stock_notification_time: '10:00',
       },
       companyLogoFile: null,
       companyLogoPreview: null,
@@ -712,6 +846,9 @@ export default {
       settingsError: '',
       settingsCategories: [],
       settingsUnits: [],
+      settingsDepartments: [],
+      selectedSettingsDepartmentId: '',
+      invitationAction: null,
       settingsCounterpartyStatuses: [],
       settingsCustomerOrderStatuses: [],
       settingsSupplierOrderStatuses: [],
@@ -721,11 +858,12 @@ export default {
       selectedSettingsCustomerOrderStatusId: '',
       selectedSettingsSupplierOrderStatusId: '',
       settingsDirectoryForms: {
-        category: { name: '', margin_pct: '' },
-        unit: { name: '' },
-        counterpartyStatus: { name: '', color: '#6c757d' },
-        customerOrderStatus: { name: '', color: '#0d6efd' },
-        supplierOrderStatus: { name: '', color: '#0d6efd' },
+        department: { name: '', translations: { ru: '', en: '' }, sourceName: '', displayName: '' },
+        category: { name: '', sourceName: '', displayName: '', margin_pct: '' },
+        unit: { name: '', sourceName: '', displayName: '' },
+        counterpartyStatus: { name: '', translations: { ru: '', en: '' }, sourceName: '', displayName: '', color: '#6c757d' },
+        customerOrderStatus: { name: '', translations: { ru: '', en: '' }, sourceName: '', displayName: '', color: '#0d6efd' },
+        supplierOrderStatus: { name: '', translations: { ru: '', en: '' }, sourceName: '', displayName: '', color: '#0d6efd' },
       },
       showInviteModal: false,
       showSettingsModal: false,
@@ -736,6 +874,8 @@ export default {
       isSendingInvitation: false,
       isLoadingEmployees: false,
       isDismissingEmployee: null,
+      isSavingEmployeeRole: false,
+      selectedEmployeeRoleId: '',
       isLoadingSettings: false,
       isSavingSettings: false,
       isDeletingReference: null,
@@ -753,7 +893,7 @@ export default {
       return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || 'U';
     },
     roleLabel() {
-      return this.profile.role_display || this.profile.role || 'User';
+      return this.systemRoleName(this.profile.access_role_name || this.profile.role_display || this.profile.role || 'User');
     },
     avatarSrc() {
       return this.avatarPreview || this.mediaUrl(this.profile.avatar);
@@ -768,19 +908,38 @@ export default {
     },
     contactFields() {
       return [
-        { key: 'first_name', label: 'First name', value: this.profile.first_name },
-        { key: 'last_name', label: 'Last name', value: this.profile.last_name },
-        { key: 'work_email', label: 'Work email', value: this.profile.work_email },
-        { key: 'personal_email', label: 'Personal email', value: this.profile.personal_email },
-        { key: 'phone', label: 'Mobile phone', value: this.profile.phone },
-        { key: 'department', label: 'Department', value: this.profile.department },
-        { key: 'position', label: 'Position', value: this.profile.position },
-        { key: 'birth_date', label: 'Birth date', value: this.formatDate(this.profile.birth_date) },
-        { key: 'hire_date', label: 'Hire date', value: this.formatDate(this.profile.hire_date) },
+        { key: 'first_name', label: this.$t('First name'), value: this.profile.first_name },
+        { key: 'last_name', label: this.$t('Last name'), value: this.profile.last_name },
+        { key: 'work_email', label: this.$t('Work email'), value: this.profile.work_email },
+        { key: 'personal_email', label: this.$t('Personal email'), value: this.profile.personal_email },
+        { key: 'phone', label: this.$t('Mobile phone'), value: this.profile.phone },
+        { key: 'department', label: this.$t('Department'), value: this.profile.department },
+        { key: 'position', label: this.$t('Position'), value: this.profile.position },
+        { key: 'birth_date', label: this.$t('Birth date'), value: this.formatDate(this.profile.birth_date) },
+        { key: 'hire_date', label: this.$t('Hire date'), value: this.formatDate(this.profile.hire_date) },
       ];
     },
     companyMemberships() {
       return this.profile.memberships || [];
+    },
+    employeeRoleChanged() {
+      return Boolean(
+        this.selectedEmployee
+        && this.selectedEmployeeRoleId
+        && Number(this.selectedEmployeeRoleId) !== Number(this.selectedEmployee.access_role)
+      );
+    },
+    timezoneOptions() {
+      const fallback = ['UTC', 'Asia/Almaty', 'Asia/Qyzylorda', 'Asia/Shanghai', 'Europe/Moscow', 'America/New_York'];
+      try {
+        const zones = Intl.supportedValuesOf('timeZone');
+        if (this.settingsForm.stock_timezone && !zones.includes(this.settingsForm.stock_timezone)) {
+          return [this.settingsForm.stock_timezone, ...zones];
+        }
+        return zones;
+      } catch {
+        return fallback;
+      }
     },
     filteredSettingsCountries() {
       const query = this.settingsCountrySearch.trim().toLowerCase();
@@ -799,6 +958,7 @@ export default {
     },
     settingsDirectories() {
       return [
+        { type: 'department', label: 'Departments', items: this.settingsDepartments, selectedId: this.selectedSettingsDepartmentId, isTranslated: true },
         {
           type: 'category',
           label: 'Categories',
@@ -818,6 +978,7 @@ export default {
           items: this.settingsCounterpartyStatuses,
           selectedId: this.selectedSettingsCounterpartyStatusId,
           hasColor: true,
+          isStatus: true,
         },
         {
           type: 'customerOrderStatus',
@@ -825,6 +986,7 @@ export default {
           items: this.settingsCustomerOrderStatuses,
           selectedId: this.selectedSettingsCustomerOrderStatusId,
           hasColor: true,
+          isStatus: true,
         },
         {
           type: 'supplierOrderStatus',
@@ -832,6 +994,7 @@ export default {
           items: this.settingsSupplierOrderStatuses,
           selectedId: this.selectedSettingsSupplierOrderStatusId,
           hasColor: true,
+          isStatus: true,
         },
       ];
     },
@@ -873,22 +1036,17 @@ export default {
       this.accessRoles = rolesRes.data;
       this.departments = departmentsRes.data;
       this.invitations = invitationsRes.data;
-      if (!this.invitationForm.access_role && this.accessRoles.length) {
-        const viewerRole = this.accessRoles.find(role => role.name === 'Viewer');
-        this.invitationForm.access_role = (viewerRole || this.accessRoles[0]).id;
-      }
     },
     async openInviteModal() {
+      this.invitationForm.access_role = '';
       this.showInviteModal = true;
       this.inviteModalTab = 'invite';
       this.invitationSuccess = '';
       this.invitationError = '';
-      if (!this.accessRoles.length || !this.invitations.length) {
-        await this.fetchCompanyAccess();
-      }
+      await this.fetchCompanyAccess();
     },
     closeInviteModal() {
-      if (this.isSendingInvitation) return;
+      if (this.isSendingInvitation || this.invitationAction) return;
       this.showInviteModal = false;
     },
     async openEmployeesTab() {
@@ -910,6 +1068,7 @@ export default {
         this.employees = data;
         if (this.selectedEmployee) {
           this.selectedEmployee = this.employees.find(employee => employee.id === this.selectedEmployee.id) || null;
+          this.selectedEmployeeRoleId = this.selectedEmployee?.access_role || '';
         }
       } catch (error) {
         alert(this.formatError(error.response?.data) || 'Unable to load employees.');
@@ -918,10 +1077,33 @@ export default {
       }
     },
     selectEmployee(employee) {
-      this.selectedEmployee = employee;
+      this.selectedEmployee = this.selectedEmployee?.id === employee.id ? null : employee;
+      this.selectedEmployeeRoleId = employee.access_role || '';
+    },
+    async saveEmployeeRole() {
+      if (!this.selectedEmployee || !this.employeeRoleChanged) return;
+      this.isSavingEmployeeRole = true;
+      try {
+        const { data } = await axios.patch(
+          `/api/auth/employees/${this.selectedEmployee.id}/access-role/`,
+          { access_role: this.selectedEmployeeRoleId },
+        );
+        this.selectedEmployee = data;
+        this.selectedEmployeeRoleId = data.access_role || '';
+        const index = this.employees.findIndex(employee => employee.id === data.id);
+        if (index >= 0) this.employees.splice(index, 1, data);
+      } catch (error) {
+        alert(this.formatError(error.response?.data) || this.$t('Unable to update employee role.'));
+      } finally {
+        this.isSavingEmployeeRole = false;
+      }
     },
     async dismissEmployee(employee) {
-      const reason = prompt(`Dismiss ${this.employeeName(employee)} from ${this.profile.company_name || 'this company'}?\n\nReason:`);
+      const employeeName = this.employeeName(employee);
+      const companyName = this.profile.company_name || this.$t('this company');
+      const reason = prompt(
+        `${this.$t('Dismiss employee')} ${employeeName} ${this.$t('from company')} ${companyName}?\n\n${this.$t('Reason')}:`,
+      );
       if (reason === null) {
         return;
       }
@@ -932,7 +1114,7 @@ export default {
         });
         await this.fetchEmployees();
       } catch (error) {
-        alert(this.formatError(error.response?.data) || 'Unable to dismiss employee.');
+        alert(this.formatError(error.response?.data) || this.$t('Unable to dismiss employee.'));
       } finally {
         this.isDismissingEmployee = null;
       }
@@ -967,7 +1149,7 @@ export default {
           ...this.settingsToForm(settings),
           business_country: settings.company_business_country || settings.business_country || '',
         };
-        this.settingsCountrySearch = settings.company_business_country_name || this.countryNameByCode(this.settingsForm.business_country);
+        this.settingsCountrySearch = this.countryNameByCode(this.settingsForm.business_country) || settings.company_business_country_name;
       } catch (error) {
         this.settingsError = this.formatError(error.response?.data) || 'Unable to load company settings.';
       } finally {
@@ -984,6 +1166,7 @@ export default {
       await Promise.all([
         this.fetchSettingsDirectory('category'),
         this.fetchSettingsDirectory('unit'),
+        this.fetchSettingsDirectory('department'),
         this.fetchSettingsDirectory('counterpartyStatus'),
         this.fetchSettingsDirectory('customerOrderStatus'),
         this.fetchSettingsDirectory('supplierOrderStatus'),
@@ -991,6 +1174,7 @@ export default {
     },
     directoryConfig(type) {
       const configs = {
+        department: { url: '/api/auth/departments/', listKey: 'settingsDepartments', selectedKey: 'selectedSettingsDepartmentId', label: 'Department' },
         category: {
           url: '/api/product-category/',
           listKey: 'settingsCategories',
@@ -1029,7 +1213,7 @@ export default {
     async fetchSettingsDirectory(type) {
       const config = this.directoryConfig(type);
       try {
-        const { data } = await axios.get(config.url);
+        const { data } = await axios.get(config.url, type === 'department' ? { params: { include_archived: true } } : {});
         this[config.listKey] = data;
         this[config.selectedKey] = data[0]?.id || '';
         this.fillSettingsDirectoryForm(type, data[0] || null);
@@ -1047,39 +1231,88 @@ export default {
       this[config.selectedKey] = id;
       this.fillSettingsDirectoryForm(type, this.selectedSettingsDirectoryItem(type));
     },
+    startNewSettingsDirectory(type) {
+      const config = this.directoryConfig(type);
+      this[config.selectedKey] = '';
+      this.fillSettingsDirectoryForm(type, null);
+    },
     fillSettingsDirectoryForm(type, item) {
       if (!item) {
         this.settingsDirectoryForms[type] = {
           ...this.settingsDirectoryForms[type],
           name: '',
+          translations: { ru: '', en: '' },
+          sourceName: '',
+          displayName: '',
           margin_pct: type === 'category' ? '' : this.settingsDirectoryForms[type].margin_pct,
         };
         return;
       }
+      const sourceName = item.name || '';
+      const displayName = this.directoryItemName(type, item);
       if (type === 'category') {
         this.settingsDirectoryForms.category = {
-          name: item.name || '',
+          name: displayName,
+          sourceName,
+          displayName,
           margin_pct: item.margin_pct == null ? '' : this.rateToPercent(item.margin_pct),
         };
       } else if (type === 'unit') {
-        this.settingsDirectoryForms.unit = { name: item.name || '' };
+        this.settingsDirectoryForms.unit = { name: displayName, sourceName, displayName };
       } else {
         this.settingsDirectoryForms[type] = {
-          name: item.name || '',
+          name: displayName,
+          translations: {
+            ru: item.translations?.ru || '',
+            en: item.translations?.en || '',
+          },
+          sourceName,
+          displayName,
           color: item.color || '#0d6efd',
         };
       }
     },
+    departmentName(item) {
+      return item?.translations?.[languageState.locale] || item?.name || item?.translations?.ru || item?.translations?.en || '';
+    },
+    directoryItemName(type, item) {
+      if (type === 'department') return this.departmentName(item);
+      const name = typeof item === 'string' ? item : (item?.name || '');
+      if (typeof item === 'object' && item?.display_name) return item.display_name;
+      if (!SYSTEM_DIRECTORY_NAMES[type]?.has(name)) return name;
+      const key = `directory.${type}.${name}`;
+      const translated = this.$t(key);
+      return translated === key ? name : translated;
+    },
+    systemRoleName(name) {
+      if (!SYSTEM_ROLE_NAMES.has(name)) return name;
+      const key = `role.${name}`;
+      const translated = this.$t(key);
+      return translated === key ? name : translated;
+    },
     directoryPayload(type) {
       const form = this.settingsDirectoryForms[type];
-      const payload = { name: form.name };
+      const name = form.name === form.displayName ? form.sourceName : form.name;
+      const payload = { name };
       if (type === 'category') {
         payload.margin_pct = form.margin_pct === '' ? null : this.percentToRate(form.margin_pct);
       }
-      if (type.endsWith('Status')) {
-        payload.color = form.color || '#0d6efd';
+      if (type.endsWith('Status') || type === 'department') {
+        payload.translations = {
+          ru: form.translations?.ru || '',
+          en: form.translations?.en || '',
+        };
+        payload.name = form.sourceName || payload.translations.en || payload.translations.ru;
+        if (type.endsWith('Status')) payload.color = form.color || '#0d6efd';
+        if (type === 'department') payload.name = payload.translations.ru || payload.translations.en;
       }
       return payload;
+    },
+    directoryFormHasName(type) {
+      const form = this.settingsDirectoryForms[type];
+      return (type.endsWith('Status') || type === 'department')
+        ? Boolean(form.translations?.ru || form.translations?.en)
+        : Boolean(form.name);
     },
     async createSettingsDirectory(type) {
       const config = this.directoryConfig(type);
@@ -1091,9 +1324,9 @@ export default {
         this[config.selectedKey] = data.id;
         this.fillSettingsDirectoryForm(type, data);
         if (config.cachePrefix) clearCacheByPrefix(config.cachePrefix);
-        this.settingsSuccess = `${config.label} has been added.`;
+        this.settingsSuccess = type === 'department' ? 'Department has been added.' : `${config.label} has been added.`;
       } catch (error) {
-        this.settingsError = this.formatError(error.response?.data) || `Unable to add ${config.label.toLowerCase()}.`;
+        this.settingsError = this.formatError(error.response?.data) || (type === 'department' ? this.$t('Unable to add department.') : `Unable to add ${config.label.toLowerCase()}.`);
       }
     },
     async updateSettingsDirectory(type) {
@@ -1108,9 +1341,9 @@ export default {
         if (idx !== -1) this[config.listKey].splice(idx, 1, data);
         this.fillSettingsDirectoryForm(type, data);
         if (config.cachePrefix) clearCacheByPrefix(config.cachePrefix);
-        this.settingsSuccess = `${config.label} has been saved.`;
+        this.settingsSuccess = type === 'department' ? 'Department has been saved.' : `${config.label} has been saved.`;
       } catch (error) {
-        this.settingsError = this.formatError(error.response?.data) || `Unable to save ${config.label.toLowerCase()}.`;
+        this.settingsError = this.formatError(error.response?.data) || (type === 'department' ? this.$t('Unable to update department.') : `Unable to save ${config.label.toLowerCase()}.`);
       }
     },
     async deleteSettingsReference(type, item) {
@@ -1146,6 +1379,7 @@ export default {
       try {
         const payload = new FormData();
         payload.append('business_country', this.settingsForm.business_country);
+        payload.append('company_language_code', this.settingsForm.company_language_code || 'ru');
         payload.append('cny_to_local_rate', this.settingsForm.cny_to_local_rate);
         payload.append('usd_to_local_rate', this.settingsForm.usd_to_local_rate);
         payload.append('logistics_cost_per_kg_usd', this.settingsForm.logistics_cost_per_kg_usd);
@@ -1154,9 +1388,16 @@ export default {
         payload.append('acquiring_pct', this.percentToRate(this.settingsForm.acquiring_pct));
         payload.append('packaging_pct', this.percentToRate(this.settingsForm.packaging_pct));
         payload.append('margin_pct', this.percentToRate(this.settingsForm.margin_pct));
+        payload.append('stock_delivery_lead_days', this.settingsForm.stock_delivery_lead_days);
+        payload.append('stock_consumption_history_days', this.settingsForm.stock_consumption_history_days);
+        payload.append('stock_timezone', this.settingsForm.stock_timezone);
+        payload.append('stock_weekly_control_enabled', this.settingsForm.stock_weekly_control_enabled);
+        payload.append('stock_notification_weekday', this.settingsForm.stock_notification_weekday);
+        payload.append('stock_notification_time', this.settingsForm.stock_notification_time);
         payload.append('company_work_email', this.settingsForm.company_work_email || '');
         payload.append('company_phone', this.settingsForm.company_phone || '');
         payload.append('company_address', this.settingsForm.company_address || '');
+        payload.append('company_china_warehouse_address', this.settingsForm.company_china_warehouse_address || '');
         payload.append('company_bank_details', this.settingsForm.company_bank_details || '');
         if (this.companyLogoFile) {
           payload.append('company_logo', this.companyLogoFile);
@@ -1174,7 +1415,7 @@ export default {
           URL.revokeObjectURL(this.companyLogoPreview);
           this.companyLogoPreview = null;
         }
-        this.settingsCountrySearch = data.company_business_country_name || this.countryNameByCode(this.settingsForm.business_country);
+        this.settingsCountrySearch = this.countryNameByCode(this.settingsForm.business_country) || data.company_business_country_name;
         this.showSettingsCountrySuggestions = false;
         this.settingsSuccess = 'Company settings have been saved.';
         await this.fetchProfile();
@@ -1207,6 +1448,8 @@ export default {
     settingsToForm(settings) {
       return {
         ...settings,
+        stock_consumption_history_days: Number(settings.stock_consumption_history_days || 90),
+        stock_notification_time: settings.stock_notification_time?.slice(0, 5) || '10:00',
         internal_logistics_pct: this.rateToPercent(settings.internal_logistics_pct),
         retail_tax_pct: this.rateToPercent(settings.retail_tax_pct),
         acquiring_pct: this.rateToPercent(settings.acquiring_pct),
@@ -1247,14 +1490,51 @@ export default {
         this.showSettingsCountrySuggestions = false;
       }, 120);
     },
+    async toggleDepartmentArchive() {
+      const item = this.selectedSettingsDirectoryItem('department');
+      if (!item) return;
+      this.isDeletingReference = `department-${item.id}`;
+      this.settingsError = '';
+      this.settingsSuccess = '';
+      try {
+        const { data } = await axios.patch(`/api/auth/departments/${item.id}/`, { is_archived: !item.is_archived });
+        const index = this.settingsDepartments.findIndex(entry => entry.id === data.id);
+        this.settingsDepartments.splice(index, 1, data);
+        this.settingsSuccess = data.is_archived ? 'Department has been archived.' : 'Department has been restored.';
+      } catch (error) {
+        this.settingsError = this.formatError(error.response?.data) || this.$t('Unable to update department.');
+      } finally {
+        this.isDeletingReference = null;
+      }
+    },
+    async manageInvitation(invitation, action) {
+      if (this.invitationAction || this.isSendingInvitation) return;
+      this.invitationAction = `${action}-${invitation.id}`;
+      this.invitationError = '';
+      this.invitationSuccess = '';
+      try {
+        const { data } = await axios.post(`/api/auth/invitations/${invitation.id}/${action}/`);
+        this.invitations = this.invitations.filter(item => item.id !== invitation.id);
+        if (action === 'resend') this.invitations.unshift(data);
+        this.invitationSuccess = action === 'resend' ? 'Invitation has been resent.' : 'Invitation has been revoked.';
+      } catch (error) {
+        this.invitationError = this.formatError(error.response?.data) || this.$t('Unable to update invitation.');
+      } finally {
+        this.invitationAction = null;
+      }
+    },
     async sendInvitation() {
       this.isSendingInvitation = true;
       this.invitationSuccess = '';
       this.invitationError = '';
       try {
         const payload = {
-          ...this.invitationForm,
           access_role: this.invitationForm.access_role || null,
+          email: this.invitationForm.email,
+          first_name: this.invitationForm.first_name,
+          last_name: this.invitationForm.last_name,
+          department: this.invitationForm.department,
+          position: this.invitationForm.position,
         };
         const { data } = await axios.post('/api/auth/invitations/', payload);
         this.invitations = [data, ...this.invitations];
@@ -1263,9 +1543,8 @@ export default {
           email: '',
           first_name: '',
           last_name: '',
-          role: 'viewer',
-          access_role: this.invitationForm.access_role,
-          department_name: '',
+          access_role: '',
+          department: null,
           position: '',
         };
         await this.fetchCompanyAccess();
@@ -1303,6 +1582,7 @@ export default {
       }
     },
     clearCompanyScopedCache() {
+      sessionStorage.clear();
       [
         'customer-order-statuses',
         'supplier-order-statuses',
@@ -1415,14 +1695,8 @@ export default {
       }
     },
     syncProfileForNav(profile) {
-      const navProfile = {
-        username: profile.username,
-        first_name: profile.first_name,
-        last_name: profile.last_name,
-        avatar: profile.avatar,
-      };
-      localStorage.setItem('current_user_profile', JSON.stringify(navProfile));
-      window.dispatchEvent(new CustomEvent('profile-updated', { detail: navProfile }));
+      setCurrentUser(profile);
+      window.dispatchEvent(new CustomEvent('profile-updated', { detail: profile }));
     },
     async buildCroppedAvatarFile() {
       const image = await this.loadImage(this.avatarPreview);
@@ -1481,7 +1755,7 @@ export default {
       return value ? new Date(value).toLocaleDateString() : '';
     },
     formatDateTime(value) {
-      return value ? new Date(value).toLocaleString() : 'not updated yet';
+      return value ? new Date(value).toLocaleString(languageState.locale === 'ru' ? 'ru-RU' : 'en-US') : 'not updated yet';
     },
     employeeName(employee) {
       const fullName = [employee.first_name, employee.last_name].filter(Boolean).join(' ');
@@ -1743,6 +2017,16 @@ export default {
   border-color: #ced4da;
 }
 
+.employee-toggle {
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+
+
 .employee-detail-panel {
   padding: 1rem;
   background: #fff;
@@ -1845,20 +2129,25 @@ export default {
   border-radius: 0.375rem;
 }
 
-.directory-delete {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 42px;
-  padding: 0;
-  line-height: 1;
-}
-
 .directory-edit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.5rem;
+}
+
+.directory-edit-grid-status {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+@media (max-width: 575.98px) {
+  .directory-edit-grid-status {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .directory-edit-grid-status > div {
+    grid-column: 1 / -1;
+  }
 }
 
 .directory-edit-grid input[type="number"] {

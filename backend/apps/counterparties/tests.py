@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from counterparties.models import Counterparty
+from counterparties.models import Counterparty, CounterpartyStatus
 from customer_orders.models import CustomerOrder, CustomerOrderStatus
 from products.models import Product
 from users.models import Company
@@ -41,12 +41,43 @@ class CounterpartyOrderingTests(APITestCase):
         self.assertEqual(ids[:2], [second.id, first.id])
 
 
+class CounterpartyStatusLanguageTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.company = Company.objects.create(name='Status Language Co', language_code='en')
+        self.user = User.objects.create_user(
+            username='status-language-user',
+            email='status-language@example.com',
+            password='password123',
+            company=self.company,
+            notification_language='ru',
+            is_email_verified=True,
+        )
+        self.status = CounterpartyStatus.objects.create(
+            company=self.company,
+            name='On hold',
+            translations={'en': 'On hold', 'ru': 'Приостановлен'},
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_status_display_name_uses_employee_language(self):
+        response = self.client.get('/api/counterparty-statuses/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]['display_name'], 'Приостановлен')
+
+        self.user.notification_language = 'en'
+        self.user.save(update_fields=['notification_language'])
+        response = self.client.get('/api/counterparty-statuses/')
+        self.assertEqual(response.data[0]['display_name'], 'On hold')
+
+
 class CounterpartyDeleteTests(APITestCase):
     def setUp(self):
         User = get_user_model()
         self.company = Company.objects.create(name='Delete Co')
         self.user = User.objects.create_user(
             username='delete-user',
+            role='manager',
             email='delete@example.com',
             password='password123',
             company=self.company,
@@ -130,6 +161,7 @@ class CounterpartyCreateTests(APITestCase):
         self.company = Company.objects.create(name='Create Co')
         self.user = User.objects.create_user(
             username='create-user',
+            role='manager',
             email='create@example.com',
             password='password123',
             company=self.company,

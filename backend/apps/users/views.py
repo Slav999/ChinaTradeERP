@@ -2,20 +2,23 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.mail import send_mail
-from django.utils import timezone
+from django.db import transaction
+from django.utils import timezone, translation
 from django_countries import countries
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .access import ensure_default_access_structure
+from .access import access_role_account_flags, ensure_default_access_structure
 from .cookies import clear_auth_cookies, set_auth_cookies
-from .models import AccessRole, CompanyMembership, Department, Invitation
+from .models import AccessRole, Company, CompanyMembership, Department, Invitation
 from .serializers import (
     AcceptInvitationSerializer,
     AccessRoleSerializer,
@@ -23,6 +26,7 @@ from .serializers import (
     CustomTokenObtainPairSerializer,
     DepartmentSerializer,
     EmployeeMembershipSerializer,
+    EmployeeAccessRoleUpdateSerializer,
     InvitationPreviewSerializer,
     InvitationSerializer,
     InviteUserSerializer,
@@ -60,10 +64,16 @@ class BusinessCountryListView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        return Response([
-            {'code': code, 'name': name}
-            for code, name in countries
-        ])
+        requested_language = request.query_params.get('language')
+        if not requested_language and request.user.is_authenticated:
+            requested_language = request.user.notification_language
+        language = 'en' if requested_language == 'en' else 'ru'
+        with translation.override(language):
+            result = [
+                {'code': code, 'name': str(name)}
+                for code, name in countries
+            ]
+        return Response(result)
 
 
 class InviteUserView(generics.CreateAPIView):
@@ -80,11 +90,17 @@ class InvitationListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         if not self.request.user.is_company_admin:
             return Invitation.objects.none()
+        Invitation.objects.filter(
+            company=self.request.user.company,
+            status=Invitation.STATUS_PENDING,
+            expires_at__lte=timezone.now(),
+        ).update(status=Invitation.STATUS_EXPIRED)
         return Invitation.objects.select_related(
             'company', 'department', 'access_role', 'invited_by'
         ).filter(
             company=self.request.user.company,
             status=Invitation.STATUS_PENDING,
+            expires_at__gt=timezone.now(),
         )
 
 
@@ -122,12 +138,68 @@ class AcceptInvitationView(APIView):
         return Response({"detail": "Invitation accepted."}, status=status.HTTP_201_CREATED)
 
 
-class DepartmentListView(generics.ListAPIView):
+class DepartmentListView(generics.ListCreateAPIView):
     serializer_class = DepartmentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        queryset = Department.objects.filter(company=self.request.user.company)
+        if not (self.request.user.is_company_admin and self.request.query_params.get('include_archived') == 'true'):
+            queryset = queryset.filter(is_archived=False)
+        return queryset
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_company_admin or not self.request.user.company_id:
+            raise PermissionDenied('Only company admins can manage departments.')
+        serializer.save(company=self.request.user.company)
+
+
+class DepartmentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = DepartmentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        if not self.request.user.is_company_admin:
+            raise PermissionDenied('Only company admins can manage departments.')
         return Department.objects.filter(company=self.request.user.company)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        department = serializer.save()
+        User.objects.filter(department_ref=department).update(department=department.name)
+
+    def perform_destroy(self, instance):
+        instance.is_archived = True
+        instance.save(update_fields=['is_archived'])
+
+
+class InvitationActionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [InvitationManageThrottle]
+
+    @transaction.atomic
+    def post(self, request, pk, action):
+        if not request.user.is_company_admin or not request.user.company_id:
+            raise PermissionDenied('Only company admins can manage invitations.')
+        Company.objects.select_for_update().get(pk=request.user.company_id)
+        invitation = get_object_or_404(
+            Invitation.objects.select_for_update(), pk=pk, company=request.user.company,
+        )
+        if invitation.status != Invitation.STATUS_PENDING or invitation.is_expired:
+            raise ValidationError('Invitation is invalid or expired.')
+        if action == 'revoke':
+            invitation.status = Invitation.STATUS_REVOKED
+            invitation.save(update_fields=['status'])
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = InvitationSerializer(data={
+            'email': invitation.email, 'first_name': invitation.first_name,
+            'last_name': invitation.last_name, 'position': invitation.position,
+            'department': invitation.department_id, 'access_role': invitation.access_role_id,
+        }, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class AccessRoleListView(generics.ListAPIView):
@@ -222,6 +294,66 @@ class DismissEmployeeView(APIView):
                 ])
 
         return Response(EmployeeMembershipSerializer(membership).data)
+
+
+class EmployeeAccessRoleUpdateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        if not request.user.is_company_admin:
+            return Response(
+                {'detail': 'Only company admins can change employee access roles.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            membership = request.user.company.memberships.select_related(
+                'user', 'company', 'company__created_by', 'department', 'access_role'
+            ).get(pk=pk, status=CompanyMembership.STATUS_ACTIVE)
+        except CompanyMembership.DoesNotExist:
+            return Response({'detail': 'Employee was not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = EmployeeAccessRoleUpdateSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        access_role = serializer.validated_data['access_role']
+        legacy_role, is_company_admin = access_role_account_flags(access_role)
+
+        if membership.company.created_by_id == membership.user_id and not is_company_admin:
+            return Response(
+                {'detail': 'The company creator must remain a company administrator.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if membership.user_id == request.user.id and membership.is_company_admin and not is_company_admin:
+            return Response(
+                {'detail': 'You cannot remove your own company administrator access.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (
+            is_company_admin
+            and not membership.is_company_admin
+            and membership.company.created_by_id != request.user.id
+        ):
+            return Response(
+                {'detail': 'Only the company creator can grant company administrator access.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        membership.access_role = access_role
+        membership.role = legacy_role
+        membership.is_company_admin = is_company_admin
+        membership.save(update_fields=['access_role', 'role', 'is_company_admin'])
+
+        if membership.user.company_id == membership.company_id:
+            membership.apply_to_user()
+
+        return Response(EmployeeMembershipSerializer(
+            membership,
+            context={'request': request},
+        ).data)
 
 
 class SwitchCompanyView(APIView):

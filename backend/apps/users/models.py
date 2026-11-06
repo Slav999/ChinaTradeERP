@@ -14,15 +14,21 @@ from .company_defaults import (
 )
 
 class Company(models.Model):
+    LANGUAGE_CHOICES = (
+        ('ru', 'Русский'),
+        ('en', 'English'),
+    )
     name = models.CharField(max_length=255, unique=True)
     business_country = CountryField(blank=True, default='')
     base_currency_code = models.CharField(max_length=3, default=DEFAULT_CURRENCY, blank=True)
     base_currency_symbol = models.CharField(max_length=12, default='₸', blank=True)
     locale_code = models.CharField(max_length=20, default=DEFAULT_LOCALE, blank=True)
+    language_code = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='ru')
     logo = models.ImageField(upload_to='company_logos/', blank=True, null=True)
     work_email = models.EmailField(blank=True)
     phone = models.CharField(max_length=50, blank=True)
     address = models.TextField(blank=True)
+    china_warehouse_address = models.TextField(blank=True)
     bank_details = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
@@ -51,6 +57,8 @@ class Department(models.Model):
         related_name='departments'
     )
     name = models.CharField(max_length=150)
+    translations = models.JSONField(default=dict, blank=True)
+    is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -220,6 +228,8 @@ class CompanyMembership(models.Model):
 
 
 class Invitation(models.Model):
+    VALIDITY_DAYS = 3
+
     STATUS_PENDING = 'pending'
     STATUS_ACCEPTED = 'accepted'
     STATUS_REVOKED = 'revoked'
@@ -293,7 +303,7 @@ class Invitation(models.Model):
         if self.email:
             self.email = self.email.lower()
         if not self.expires_at:
-            self.expires_at = timezone.now() + timezone.timedelta(days=7)
+            self.expires_at = timezone.now() + timezone.timedelta(days=self.VALIDITY_DAYS)
         if not self.token_hash:
             self.token_hash = self.hash_token(get_random_string(48))
         super().save(*args, **kwargs)

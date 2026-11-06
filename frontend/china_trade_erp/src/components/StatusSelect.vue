@@ -14,7 +14,7 @@
           class="status-select-dot selected-dot"
           :style="{ backgroundColor: selectedStatus.color || fallbackColor }"
         ></span>
-        <span>{{ selectedStatus ? selectedStatus.name : placeholder }}</span>
+        <span>{{ selectedStatus ? (selectedStatus.display_name || selectedStatus.name) : placeholder }}</span>
       </span>
       <span class="status-select-caret"></span>
     </button>
@@ -40,7 +40,7 @@
           class="status-select-dot"
           :style="{ backgroundColor: status.color || fallbackColor }"
         ></span>
-        <span class="status-select-item-name">{{ status.name }}</span>
+        <span class="status-select-item-name">{{ status.display_name || status.name }}</span>
       </button>
     </div>
   </div>

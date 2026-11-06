@@ -16,13 +16,16 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
 from django.db.models import Q
+from users.permissions import HasCompanyAccessPermission
 
 
 class CounterpartyViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     queryset = Counterparty.objects.all()
     serializer_class = CounterpartySerializer
     pagination_class = StandardResultsSetPagination
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompanyAccessPermission]
+    access_view_permission = 'counterparties.view'
+    access_manage_permission = 'counterparties.manage'
 
     def get_queryset(self):
         queryset = Counterparty.objects.filter(
@@ -131,7 +134,9 @@ class CounterpartyViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 class CounterpartyStatusViewSet(viewsets.ModelViewSet):
     queryset = CounterpartyStatus.objects.all()
     serializer_class = CounterpartyStatusSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompanyAccessPermission]
+    access_view_permission = 'counterparties.view'
+    access_manage_permission = 'counterparties.manage'
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)

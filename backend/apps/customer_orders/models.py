@@ -1,8 +1,7 @@
 from django.db import models
-from core.models import BaseModel, ChangeLog
+from core.models import BaseModel, ChangeLog, AnnualOrderModel
 from counterparties.models import Counterparty
 from products.models import Product
-from django.db.models import Max
 from decimal import Decimal
 from users.models import Company
 
@@ -26,6 +25,9 @@ class CustomerOrderStatus(models.Model):
         related_name='customer_order_statuses',
     )
     name = models.CharField("Name", max_length=100)
+    code = models.CharField(max_length=50, null=True, blank=True)
+    translations = models.JSONField(default=dict, blank=True)
+    is_system = models.BooleanField(default=False)
     color = models.CharField("Color (hex)", max_length=7, default="#007bff")
 
     class Meta:
@@ -33,7 +35,12 @@ class CustomerOrderStatus(models.Model):
         verbose_name_plural = "Customer Order Statuses"
         constraints = [
             models.UniqueConstraint(fields=['company', 'name'], name='unique_customer_order_status_per_company'),
+            models.UniqueConstraint(fields=['company', 'code'], name='unique_customer_order_status_code_per_company'),
         ]
+
+    def display_name(self, language=None):
+        from core.statuses import status_display_name
+        return status_display_name(self, language)
 
     def __str__(self):
         return self.name
@@ -58,7 +65,7 @@ class ShippingAddress(models.Model):
         return self.default_shipping_address or '-'
 
 
-class CustomerOrder(BaseModel):
+class CustomerOrder(AnnualOrderModel):
     """Customer order"""
     company = models.ForeignKey(
         Company,
@@ -98,6 +105,9 @@ class CustomerOrder(BaseModel):
     shipment_date = models.DateField(
         "Shipment Date", blank=True, null=True
     )
+    sent_at = models.DateTimeField(
+        "Sent At", blank=True, null=True
+    )
     discount_pct = models.DecimalField(
         "Order Discount (%)",
         max_digits=5,
@@ -118,21 +128,13 @@ class CustomerOrder(BaseModel):
         verbose_name_plural = "Customer Orders"
         ordering = ['-created_at']
         constraints = [
-            models.UniqueConstraint(fields=['company', 'order_number'], name='unique_customer_order_number_per_company'),
+            models.UniqueConstraint(fields=['company', 'order_year', 'order_number'], name='unique_customer_order_number_per_year'),
         ]
 
     def save(self, *args, **kwargs):
         if not self.company_id and self.customer_id:
             self.company = self.customer.company
-        # apply default shipping address if not provided
-        if not self.shipping_address:
-            self.shipping_address = get_default_shipping_address(self.company if self.company_id else None)
         # auto-generate order number if not set
-        if not self.order_number:
-            last_id = (
-                CustomerOrder.objects.filter(company=self.company).aggregate(Max('id')).get('id__max') or 0
-            )
-            self.order_number = str(last_id + 1)
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -159,6 +161,14 @@ class CustomerOrderItem(models.Model):
         decimal_places=2,
         default=0,
     )
+    unit_sale_price = models.DecimalField(
+        "Sale price per unit at order creation",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=None,
+    )
     unit = models.CharField(
         "Unit of Measure", max_length=20, blank=True
     )
@@ -178,6 +188,11 @@ class CustomerOrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name} — {self.quantity} {self.unit}"
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.product_id and self.unit_sale_price is None:
+            self.unit_sale_price = self.product.sale_price or Decimal('0.00')
+        super().save(*args, **kwargs)
 
 
 class CustomerOrderAttachment(models.Model):

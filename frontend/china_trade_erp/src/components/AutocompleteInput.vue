@@ -23,14 +23,11 @@
           :class="{ active: index === highlightedIndex }"
           @mousedown.prevent="selectOption(option)"
       >
-        <span class="autocomplete-name">{{ option.name }}</span>
-        <span v-if="optionMeta(option)" class="autocomplete-meta">
-          {{ optionMeta(option) }}
-        </span>
+        <span class="autocomplete-name">{{ optionLabel(option) }}</span>
       </button>
 
       <div v-if="!visibleOptions.length" class="autocomplete-empty">
-        No matches
+        {{ $t('No matches') }}
       </div>
     </div>
   </div>
@@ -56,12 +53,16 @@ export default {
       type: Number,
       default: 20,
     },
+    translateOptions: {
+      type: Boolean,
+      default: false,
+    },
     modelModifiers: {
       type: Object,
       default: () => ({}),
     },
   },
-  emits: ['update:modelValue', 'input'],
+  emits: ['update:modelValue', 'input', 'select'],
   data() {
     return {
       isOpen: false,
@@ -101,6 +102,7 @@ export default {
     selectOption(option) {
       this.$emit('update:modelValue', option.name || '');
       this.$emit('input');
+      this.$emit('select', option);
       this.closeDropdown();
     },
     moveHighlight(direction) {
@@ -128,13 +130,9 @@ export default {
         this.closeDropdown();
       }
     },
-    optionMeta(option) {
-      const roles = [];
-      if (option.is_supplier) roles.push('Supplier');
-      if (option.is_customer) roles.push('Customer');
-
-      const region = option.type === 'china' ? 'Chinese' : option.type === 'local' ? 'Local' : option.type;
-      return [...roles, region].filter(Boolean).join(' / ');
+    optionLabel(option) {
+      const name = option.display_name || option.name || '';
+      return this.translateOptions ? this.$t(name) : name;
     },
   },
 };
@@ -164,8 +162,6 @@ export default {
   width: 100%;
   min-height: 38px;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
   padding: 0.45rem 0.6rem;
   color: #212529;
   text-align: left;
@@ -182,16 +178,6 @@ export default {
 .autocomplete-name {
   overflow: hidden;
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.autocomplete-meta {
-  flex: 0 0 auto;
-  max-width: 45%;
-  overflow: hidden;
-  color: #6c757d;
-  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

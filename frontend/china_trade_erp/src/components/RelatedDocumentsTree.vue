@@ -21,7 +21,7 @@
           </div>
         </div>
         <div class="doc-card__status" :style="{ backgroundColor: statusColor(root) }">
-          {{ root.status?.name || '-' }}
+          {{ root.status?.display_name || root.status?.name || '-' }}
         </div>
       </button>
     </div>
@@ -51,7 +51,7 @@
           </div>
         </div>
         <div class="doc-card__status" :style="{ backgroundColor: statusColor(child) }">
-          {{ child.status?.name || '-' }}
+          {{ child.status?.display_name || child.status?.name || '-' }}
         </div>
       </button>
       <div v-if="!children.length" class="text-muted py-3">

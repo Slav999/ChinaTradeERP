@@ -3,23 +3,31 @@
     <!-- Заголовок + «Назад» -->
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h1>{{ isEdit ? 'Edit Order' : 'New Order' }}</h1>
-      <div>
+      <div class="order-actions">
+        <ChatShareButton v-if="selectedId" type="customer_order" :record-id="Number(selectedId)" :title="`Заказ покупателя №${orderForm.order_number || selectedId}`" />
+        <RelatedChatsButton v-if="selectedId" type="customer_order" :record-id="Number(selectedId)" :title="`Заказ покупателя №${orderForm.order_number || selectedId}`" />
+        <div v-if="canManageOrders" class="send-action">
         <button
-          class="btn btn-primary me-2"
-          :disabled="isSending"
+          class="btn btn-primary"
+          :disabled="isSending || !isEdit || !orderItems.length || hasUnsavedChanges"
+            :title="$t(!orderItems.length ? 'Add at least one position before sending the order.' : (hasUnsavedChanges ? 'Save changes before sending the order.' : ''))"
           @click="sendToCustomer"
         >
           {{ isSending ? 'Sending...' : 'Send to Customer' }}
         </button>
+          <div v-if="orderForm.sent_at" class="sent-note">
+            Sent {{ formatDate(orderForm.sent_at) }}
+          </div>
+        </div>
         <button
-          v-if="isEdit"
-          class="btn btn-outline-primary me-2"
+          v-if="isEdit && canManageSupplierOrders"
+          class="btn btn-outline-primary"
           :disabled="isCreatingSupplierOrders"
           @click="createSupplierOrders"
         >
           {{ supplierOrdersActionLabel }}
         </button>
-        <button type="button" class="btn btn-success me-2" :disabled="isSaving" @click="saveOrder">
+        <button v-if="canManageOrders" type="button" class="btn btn-success" :disabled="isSaving" @click="saveOrder">
           {{ isSaving ? 'Saving...' : (isEdit ? 'Update Order' : 'Create Order') }}
         </button>
         <button class="btn btn-secondary" @click="goBack">← Back to Orders</button>
@@ -93,6 +101,7 @@
         </div>
 
         <form @submit.prevent="saveOrder">
+          <fieldset :disabled="!canManageOrders" class="p-0 m-0 border-0">
           <div class="row gx-2 gy-2 order-form-grid">
             <div class="col-6 col-md-4">
               <label class="form-label small">Order Number</label>
@@ -104,10 +113,21 @@
             </div>
             <div class="col-6 col-md-4">
               <label class="form-label small">Customer</label>
-              <select v-model="orderForm.customer_id" class="form-select form-select-sm">
-                <option disabled value="">Select customer...</option>
-                <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
-              </select>
+              <div class="input-group input-group-sm">
+                <SearchableCounterpartySelect
+                  v-model="orderForm.customer_id"
+                  :options="customers"
+                  placeholder="Select customer..."
+                  size="sm"
+                />
+                <IconButton
+                  icon="plus-lg"
+                  variant="outline-secondary"
+                  size="sm"
+                  :title="$t('Create customer')"
+                  @click="openCounterpartyModal('customer')"
+                />
+              </div>
             </div>
             <div class="col-md-4">
               <label class="form-label small">Shipment</label>
@@ -126,6 +146,7 @@
               <textarea v-model="orderForm.internal_comment" class="form-control form-control-sm" rows="3"></textarea>
             </div>
           </div>
+          </fieldset>
         </form>
       </div>
     </transition>
@@ -147,6 +168,7 @@
         <div class="compact-files-block">
           <label class="form-label small">Attachments</label>
           <input
+            v-if="canManageOrders"
             type="file"
             multiple
             class="form-control form-control-sm mb-2"
@@ -157,10 +179,15 @@
               <a :href="att.file" target="_blank" class="flex-grow-1 text-truncate">
                 {{ attachmentName(att) }}
               </a>
-              <button
-                class="btn btn-sm btn-outline-danger ms-2"
+              <IconButton
+                v-if="canManageOrders"
+                icon="trash"
+                variant="outline-danger"
+                size="sm"
+                class="ms-2"
+                :title="$t('Delete attachment')"
                 @click="deleteAttachment(att.id)"
-              >&times;</button>
+              />
             </li>
           </ul>
         </div>
@@ -170,7 +197,7 @@
     <!-- Positions Tab -->
     <transition name="fade">
       <div v-if="activeTab==='positions'">
-        <div class="position-search position-relative compact-position-search mb-3">
+        <div v-if="canManageOrders" class="position-search position-relative compact-position-search mb-3">
           <input
             v-model="positionSearch"
             @input="fetchProductSuggestions"
@@ -206,15 +233,15 @@
         <div class="positions-layout">
           <div class="positions-table-wrap">
             <table class="table table-sm align-middle positions-table">
-              <thead>
+              <thead v-if="orderItems.length">
                 <tr>
-                  <th class="product-col">Product</th>
-                  <th class="qty-col">Qty</th>
-                  <th class="unit-col">Unit</th>
-                  <th class="money-col text-end">Sale price</th>
-                  <th class="discount-col">Discount, %</th>
-                  <th class="money-col text-end">Total</th>
-                  <th class="action-col"></th>
+                  <th class="product-col">{{ $t('Product') }}</th>
+                  <th class="qty-col">{{ $t('Qty') }}</th>
+                  <th class="unit-col">{{ $t('Unit') }}</th>
+                  <th v-if="canViewSalePrice" class="money-col text-end">{{ $t('Sale price') }}</th>
+                  <th v-if="canViewSalePrice" class="discount-col">{{ $t('Discount, %') }}</th>
+                  <th v-if="canViewSalePrice" class="money-col text-end">{{ $t('Total') }}</th>
+                  <th v-if="canManageOrders" class="action-col"></th>
                 </tr>
               </thead>
               <tbody>
@@ -228,36 +255,54 @@
                       step="0.01"
                       min="0"
                       class="form-control form-control-sm qty-input"
+                      :disabled="!canManageOrders"
                       v-model.number="item.quantity"
                       @change="updatePosition(item)"
                     />
                   </td>
                   <td class="unit-col">{{ item.product.unit?.name || '—' }}</td>
-                  <td class="money-col text-end">{{ formatMoney(itemUnitSalePrice(item)) }}</td>
-                  <td class="discount-col">
+                  <td v-if="canViewSalePrice" class="money-col">
+                    <div class="input-group input-group-sm">
+                      <input
+                        v-model.number="item.unit_sale_price"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        class="form-control text-end"
+                        :disabled="!canEditOrderSalePrice"
+                        @change="updatePosition(item)"
+                      />
+                      <IconButton
+                        v-if="canEditOrderSalePrice"
+                        icon="arrow-counterclockwise"
+                        variant="outline-secondary"
+                        :title="$t('Restore product sale price')"
+                        @click="resetSalePrice(item)"
+                      />
+                    </div>
+                  </td>
+                  <td v-if="canViewSalePrice" class="discount-col">
                     <input
                       type="text"
                       inputmode="numeric"
-                      :disabled="hasOrderDiscount"
+                      :disabled="hasOrderDiscount || !canEditOrderSalePrice"
                       class="form-control form-control-sm discount-input"
                       v-model="item.discount_percent"
                       @change="updatePosition(item)"
                     />
                   </td>
-                  <td class="money-col text-end fw-semibold">{{ formatMoney(itemTotalAfterDiscount(item)) }}</td>
-                  <td class="action-col">
-                    <button class="btn btn-sm btn-outline-danger position-remove-btn" @click="removeItem(item.id)">
-                      &times;
-                    </button>
+                  <td v-if="canViewSalePrice" class="money-col text-end fw-semibold">{{ formatMoney(itemTotalAfterDiscount(item)) }}</td>
+                  <td v-if="canManageOrders" class="action-col">
+                    <IconButton icon="trash" variant="outline-danger" size="sm" :title="$t('Remove position')" @click="removeItem(item.id)" />
                   </td>
                 </tr>
                 <tr v-if="!orderItems.length">
-                  <td colspan="7" class="text-center text-muted">No positions yet.</td>
+                  <td :colspan="customerPositionColumnCount" class="text-center text-muted">{{ $t('No positions yet.') }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <div v-if="orderItems.length" class="order-totals">
+          <div v-if="orderItems.length && canViewSalePrice" class="order-totals">
             <div class="d-flex justify-content-between align-items-center gap-3 mb-2">
               <span class="text-muted">Subtotal</span>
               <strong>{{ formatMoney(positionsSubtotal) }}</strong>
@@ -269,7 +314,7 @@
                 v-model="orderForm.discount_pct"
                 type="text"
                 inputmode="numeric"
-                :disabled="hasLineDiscounts"
+                :disabled="hasLineDiscounts || !canEditOrderSalePrice"
                 class="form-control form-control-sm discount-input"
               />
             </div>
@@ -341,10 +386,25 @@
       :categories="categories"
       :units="units"
       :suppliers="suppliers"
+      :read-only="!canManageProducts"
+      :can-view-purchase-price="canViewPurchasePrice"
+      :can-edit-purchase-price="canEditPurchasePrice"
+      :can-view-cost-price="canViewCostPrice"
+      :can-view-cost-breakdown="canViewCostBreakdown"
+      :can-view-sale-price="canViewSalePrice"
+      :can-edit-sale-price="canEditCatalogSalePrice"
       @saved="onProductSaved"
       @reference-created="onReferenceCreated"
       @open-history="openProductHistory"
       @close="showProductModal = false"
+    />
+
+    <CounterpartyQuickAddModal
+      :visible="showCounterpartyModal"
+      :role="counterpartyModalRole"
+      :title="counterpartyModalTitle"
+      @saved="onCounterpartySaved"
+      @close="showCounterpartyModal = false"
     />
 
     <!-- PRODUCT HISTORY-MODAL -->
@@ -397,17 +457,25 @@
 
 <script>
 import axios from '../axios';
+import ChatShareButton from '../components/ChatShareButton.vue';
+import RelatedChatsButton from '../components/RelatedChatsButton.vue';
+import CounterpartyQuickAddModal from '../components/CounterpartyQuickAddModal.vue';
 import ProductAddEditModal from '../components/ProductAddEditModal.vue';
 import RelatedDocumentsTree from '../components/RelatedDocumentsTree.vue';
+import SearchableCounterpartySelect from '../components/SearchableCounterpartySelect.vue';
 import StatusSelect from '../components/StatusSelect.vue';
+import IconButton from '../components/IconButton.vue';
+import { clearCacheByPrefix } from '../utils/pageCache';
+import { accessState, hasPermission, PERMISSIONS } from '../access';
 
 export default {
   name: 'CustomerOrderDetail',
-  components: { ProductAddEditModal, RelatedDocumentsTree, StatusSelect },
+  components: { RelatedChatsButton, ChatShareButton, CounterpartyQuickAddModal, ProductAddEditModal, RelatedDocumentsTree, SearchableCounterpartySelect, StatusSelect, IconButton },
   data() {
     return {
       isSending: false,
       isSaving: false,
+      suppressLeaveGuard: false,
       saveToast: '',
       saveToastTimer: null,
       isCreatingSupplierOrders: false,
@@ -423,6 +491,7 @@ export default {
         shipping_address: '',
         customer_comment: '',
         internal_comment: '',
+        sent_at: null,
         discount_pct: 0,
       },
       existingAttachments: [],
@@ -449,6 +518,8 @@ export default {
       showProductModal: false,
       editingProduct: null,
       addProductToOrderAfterSave: false,
+      showCounterpartyModal: false,
+      counterpartyModalRole: 'customer',
 
       selectedId: null,
       savedSnapshot: '',
@@ -457,6 +528,39 @@ export default {
   },
 
   computed: {
+    canManageOrders() {
+      return hasPermission(PERMISSIONS.CUSTOMER_ORDERS_MANAGE, accessState.user);
+    },
+    canManageSupplierOrders() {
+      return hasPermission(PERMISSIONS.SUPPLIER_ORDERS_MANAGE, accessState.user);
+    },
+    canManageProducts() {
+      return hasPermission(PERMISSIONS.PRODUCTS_MANAGE, accessState.user);
+    },
+    canViewPurchasePrice() {
+      return hasPermission(PERMISSIONS.PURCHASE_PRICE_VIEW, accessState.user);
+    },
+    canEditPurchasePrice() {
+      return hasPermission(PERMISSIONS.PURCHASE_PRICE_MANAGE, accessState.user);
+    },
+    canViewCostPrice() {
+      return hasPermission(PERMISSIONS.COST_PRICE_VIEW, accessState.user);
+    },
+    canViewCostBreakdown() {
+      return hasPermission(PERMISSIONS.COMPANY_SETTINGS_MANAGE, accessState.user);
+    },
+    canViewSalePrice() {
+      return hasPermission(PERMISSIONS.SALE_PRICE_VIEW, accessState.user);
+    },
+    canEditOrderSalePrice() {
+      return this.canManageOrders && hasPermission(PERMISSIONS.ORDER_SALE_PRICE_MANAGE, accessState.user);
+    },
+    canEditCatalogSalePrice() {
+      return hasPermission(PERMISSIONS.CATALOG_SALE_PRICE_MANAGE, accessState.user);
+    },
+    customerPositionColumnCount() {
+      return 3 + (this.canViewSalePrice ? 3 : 0) + (this.canManageOrders ? 1 : 0);
+    },
     isEdit() {
       return !!this.selectedId;
     },
@@ -488,7 +592,10 @@ export default {
       return this.numberOrZero(this.orderForm.discount_pct) > 0;
     },
     hasUnsavedChanges() {
-      return this.savedSnapshot !== this.currentSnapshot();
+      return this.canManageOrders && this.savedSnapshot !== this.currentSnapshot();
+    },
+    counterpartyModalTitle() {
+      return this.counterpartyModalRole === 'supplier' ? 'Add Supplier' : 'Add Customer';
     }
   },
 
@@ -530,6 +637,16 @@ export default {
     }
   },
 
+  beforeRouteLeave(to, from, next) {
+    if (this.suppressLeaveGuard) {
+      next();
+      return;
+    }
+    this.confirmUnsavedChanges({ skipRedirect: true })
+      .then(canLeave => next(canLeave))
+      .catch(() => next(false));
+  },
+
   methods: {
     /* ——————— API ——————— */
 
@@ -555,8 +672,26 @@ export default {
         this.units = unitRes.data;
       } catch (e) {
         console.error(e);
-        alert('Ошибка при загрузке справочников');
+        alert('Unable to load reference data.');
       }
+    },
+
+    openCounterpartyModal(role) {
+      this.counterpartyModalRole = role;
+      this.showCounterpartyModal = true;
+    },
+
+    onCounterpartySaved(counterparty) {
+      if (counterparty.is_customer && !this.customers.some(item => item.id === counterparty.id)) {
+        this.customers.push(counterparty);
+      }
+      if (counterparty.is_supplier && !this.suppliers.some(item => item.id === counterparty.id)) {
+        this.suppliers.push(counterparty);
+      }
+      if (counterparty.is_customer) {
+        this.orderForm.customer_id = counterparty.id;
+      }
+      this.showCounterpartyModal = false;
     },
 
     async fetchOrder() {
@@ -574,7 +709,7 @@ export default {
         this.existingAttachments = o.attachments || [];
       } catch (e) {
         console.error(e);
-        alert('Не удалось загрузить заказ');
+        alert('Unable to load order.');
       }
     },
 
@@ -595,6 +730,7 @@ export default {
 
     async saveOrder(options = {}) {
       const silent = options?.silent === true;
+      const skipRedirect = options?.skipRedirect === true;
       if (!this.orderForm.customer_id) {
         if (!silent) {
           alert('Select a customer before saving the order.');
@@ -660,12 +796,14 @@ export default {
                 order: this.selectedId,
                 product_id: item.product.id,
                 quantity: item.quantity,
+                unit_sale_price: item.unit_sale_price,
                 discount_pct: this.percentToRate(item.discount_percent),
                 comment: item.comment || '',
               });
             } else {
               await axios.patch(`/api/customer-order-items/${item.id}/`, {
                 quantity: item.quantity,
+                unit_sale_price: item.unit_sale_price,
                 discount_pct: this.percentToRate(item.discount_percent),
                 comment: item.comment || '',
               });
@@ -689,6 +827,7 @@ export default {
               order: newOrderId,
               product_id: item.product.id,
               quantity: item.quantity,
+              unit_sale_price: item.unit_sale_price,
               discount_pct: this.percentToRate(item.discount_percent),
               comment: item.comment || '',
             });
@@ -702,7 +841,11 @@ export default {
             discount_pct: this.rateToPercent(res.data.discount_pct),
           };
           if (!silent) this.showSaveToast('Order created');
-          await this.$router.replace(`/customer-orders/${newOrderId}`);
+          if (!skipRedirect) {
+            this.suppressLeaveGuard = true;
+            await this.$router.replace(`/customer-orders/${newOrderId}`);
+            this.suppressLeaveGuard = false;
+          }
           await this.fetchOrderItems();
         }
         this.attachments = [];
@@ -714,21 +857,25 @@ export default {
         alert(message);
         if (silent) return null;
         return null;
-        alert('Ошибка при сохранении');
+        alert('Unable to save order.');
       } finally {
         this.isSaving = false;
       }
     },
 
     async sendToCustomer() {
+      if (!this.isEdit || !this.orderItems.length || this.hasUnsavedChanges) return;
       if (!confirm('Send order to customer?')) return;
       this.isSending = true;
       try {
-        await axios.post(`/api/customer-order/${this.selectedId}/send/`);
+        const { data } = await axios.post(`/api/customer-order/${this.selectedId}/send/`);
+        this.orderForm.sent_at = data.sent_at || new Date().toISOString();
+        clearCacheByPrefix('customer-orders:');
+        this.updateSavedSnapshot();
         this.showSaveToast('Order sent');
       } catch (e) {
         console.error(e);
-        alert('Не удалось отправить заказ');
+        alert('Unable to send order.');
       } finally {
         this.isSending = false;
       }
@@ -756,7 +903,7 @@ export default {
         this.existingAttachments = this.existingAttachments.filter(a => a.id !== id);
       } catch (e) {
         console.error(e);
-        alert('Не удалось удалить файл');
+        alert('Unable to delete file.');
       }
     },
 
@@ -776,6 +923,7 @@ export default {
         id: `tmp-${Date.now()}-${product.id}`,
         product,
         quantity: 1,
+        unit_sale_price: this.numberOrZero(product.sale_price),
         discount_percent: 0,
         comment: '',
       });
@@ -801,6 +949,7 @@ export default {
 
     async updatePosition(item) {
       item.quantity = this.formatQuantityInput(item.quantity);
+      item.unit_sale_price = this.formatQuantityInput(item.unit_sale_price);
       if (this.hasOrderDiscount && this.numberOrZero(item.discount_percent) > 0) {
         item.discount_percent = 0;
         alert('Remove the order discount before setting a product discount.');
@@ -824,6 +973,7 @@ export default {
           id: `tmp-${Date.now()}-${product.id}`,
           product,
           quantity: 1,
+          unit_sale_price: this.numberOrZero(product.sale_price),
           discount_percent: 0,
           comment: '',
         });
@@ -833,6 +983,7 @@ export default {
         id: `tmp-${Date.now()}-${product.id}`,
         product,
         quantity: 1,
+        unit_sale_price: this.numberOrZero(product.sale_price),
         discount_percent: 0,
         comment: '',
       });
@@ -856,13 +1007,12 @@ export default {
       this.leaveToOrders();
     },
     async leaveToOrders() {
-      const canLeave = await this.confirmUnsavedChanges();
-      if (canLeave) this.$router.push('/customer-orders');
+      this.$router.push('/customer-orders');
     },
-    async confirmUnsavedChanges() {
+    async confirmUnsavedChanges(saveOptions = {}) {
       if (!this.hasUnsavedChanges) return true;
       if (confirm('Save changes before leaving?')) {
-        const saved = await this.saveOrder({ silent: true });
+        const saved = await this.saveOrder({ silent: true, ...saveOptions });
         return !!saved;
       }
       return confirm('Leave without saving changes?');
@@ -905,6 +1055,7 @@ export default {
           id: item.id,
           product_id: item.product?.id,
           quantity: this.numberOrZero(item.quantity),
+          unit_sale_price: this.numberOrZero(item.unit_sale_price),
           discount_percent: this.numberOrZero(item.discount_percent),
           comment: item.comment || '',
         })),
@@ -918,6 +1069,9 @@ export default {
       } catch {
         return false;
       }
+    },
+    resetSalePrice(item) {
+      item.unit_sale_price = this.numberOrZero(item.product?.sale_price);
     },
     updateSavedSnapshot() {
       this.savedSnapshot = this.currentSnapshot();
@@ -938,7 +1092,7 @@ export default {
         this.historyLogs = (await axios.get(`/api/customer-order/${this.selectedId}/history/`)).data;
         this.showHistoryModal = true;
       } catch {
-        alert('Не удалось загрузить историю');
+        alert('Unable to load change history.');
       }
     },
     closeHistory() {
@@ -972,6 +1126,7 @@ export default {
         shipping_address: 'Address',
         customer_comment: 'Customer Comment',
         internal_comment: 'Internal Comment',
+        item_unit_sale_price: 'Item sale price',
       };
       return m[k] || k;
     },
@@ -1012,6 +1167,7 @@ export default {
       return {
         ...item,
         quantity: this.formatQuantityInput(item.quantity),
+        unit_sale_price: this.numberOrZero(item.unit_sale_price ?? item.product?.sale_price),
         discount_percent: this.rateToPercent(item.discount_pct),
       };
     },
@@ -1065,6 +1221,25 @@ export default {
 <style scoped>
 .modal-backdrop { display: none; }
 .modal-backdrop.show { display: block; }
+.order-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.send-action {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sent-note {
+  margin-top: 0.25rem;
+  color: #557066;
+  font-size: 0.76rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
 .modal-fade-enter-active, .modal-fade-leave-active {
   transition: opacity .3s, transform .3s;
 }
@@ -1106,6 +1281,16 @@ export default {
 .compact-files-block,
 .compact-position-notice {
   max-width: 520px;
+}
+.quick-add-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding-right: 0;
+  padding-left: 0;
+  font-weight: 600;
+  line-height: 1;
 }
 .order-form-grid > [class*="col-"]:not(.col-12) {
   flex: 0 0 auto;

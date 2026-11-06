@@ -2,6 +2,9 @@ import glob
 import io
 import os
 from decimal import Decimal
+from xml.sax.saxutils import escape
+
+from PIL import Image as PILImage, ImageOps, UnidentifiedImageError
 
 from django.utils import timezone
 from reportlab.lib import colors
@@ -189,6 +192,25 @@ def _items_table(headers, rows, widths):
     return table
 
 
+def _product_thumbnail(product):
+    """Embed a small, oriented image; unavailable product media must not block a PDF."""
+    if not product.image:
+        return ''
+    try:
+        with product.image.open('rb') as source:
+            with PILImage.open(source) as original:
+                picture = ImageOps.exif_transpose(original).convert('RGBA')
+                picture.thumbnail((240, 240), PILImage.Resampling.LANCZOS)
+                canvas = PILImage.new('RGB', (240, 240), 'white')
+                canvas.paste(picture, ((240 - picture.width) // 2, (240 - picture.height) // 2), picture)
+                buffer = io.BytesIO()
+                canvas.save(buffer, format='PNG')
+        buffer.seek(0)
+        return Image(buffer, width=16 * mm, height=16 * mm)
+    except (OSError, ValueError, UnidentifiedImageError, PILImage.DecompressionBombError):
+        return ''
+
+
 def build_supplier_order_pdf(order):
     styles = _styles()
     buffer = io.BytesIO()
@@ -218,17 +240,18 @@ def build_supplier_order_pdf(order):
     for index, item in enumerate(order.items.select_related('product', 'product__unit').all(), start=1):
         rows.append([
             str(index),
+            _product_thumbnail(item.product),
             _p(item.product.sku, styles['body']),
             _p(item.product.name, styles['body']),
             _qty(item.quantity),
             item.product.unit.name if item.product.unit else item.unit,
         ])
     if not rows:
-        rows.append(['', _p('No items', styles['body']), '', '', ''])
+        rows.append(['', '', _p('No items', styles['body']), '', '', ''])
     story.append(_items_table(
-        ['#', 'SKU', 'Product', 'Qty', 'Unit'],
+        ['#', 'Photo', 'SKU', 'Product', 'Qty', 'Unit'],
         rows,
-        [10 * mm, 32 * mm, 84 * mm, 22 * mm, 22 * mm],
+        [8 * mm, 20 * mm, 30 * mm, 68 * mm, 22 * mm, 22 * mm],
     ))
 
     doc.build(story)
@@ -269,7 +292,9 @@ def build_customer_order_pdf(order):
     subtotal = Decimal('0.00')
     line_discount_total = Decimal('0.00')
     for index, item in enumerate(items, start=1):
-        unit_price = item.product.sale_price or Decimal('0.00')
+        unit_price = getattr(item, 'unit_sale_price', None)
+        if unit_price is None:
+            unit_price = item.product.sale_price or Decimal('0.00')
         quantity = item.quantity or Decimal('0.00')
         line_discount = item.discount_pct or Decimal('0.0000')
         line_subtotal = (unit_price * quantity).quantize(Decimal('0.01'))
@@ -279,12 +304,12 @@ def build_customer_order_pdf(order):
         line_discount_total += line_discount_amount
         row = [
             str(index),
-            _p(item.product.sku, styles['body']),
-            _p(item.product.name, styles['body']),
+            _product_thumbnail(item.product),
+            _p(f'{escape(item.product.sku)}<br/>{escape(item.product.name)}', styles['body']),
             _qty(quantity),
             item.product.unit.name if item.product.unit else item.unit,
-            _money(unit_price, currency),
-            _money(line_total, currency),
+            _p(_money(unit_price, currency), styles['right']),
+            _p(_money(line_total, currency), styles['right']),
         ]
         if has_line_discounts:
             row.insert(-1, _pct(line_discount) if line_discount else '')
@@ -293,11 +318,11 @@ def build_customer_order_pdf(order):
         rows.append(['', '', _p('No items', styles['body']), '', '', '', ''])
         if has_line_discounts:
             rows[0].insert(-1, '')
-    headers = ['#', 'SKU', 'Product', 'Qty', 'Unit', 'Price', 'Total']
-    widths = [8 * mm, 22 * mm, 56 * mm, 16 * mm, 15 * mm, 26 * mm, 27 * mm]
+    headers = ['#', 'Photo', 'SKU / Product', 'Qty', 'Unit', 'Price', 'Total']
+    widths = [8 * mm, 20 * mm, 52 * mm, 16 * mm, 15 * mm, 29 * mm, 30 * mm]
     if has_line_discounts:
         headers.insert(-1, 'Discount')
-        widths = [8 * mm, 22 * mm, 48 * mm, 16 * mm, 15 * mm, 24 * mm, 18 * mm, 25 * mm]
+        widths = [8 * mm, 20 * mm, 42 * mm, 15 * mm, 12 * mm, 27 * mm, 18 * mm, 28 * mm]
     story.append(_items_table(
         headers,
         rows,

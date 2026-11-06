@@ -11,12 +11,20 @@ class CounterpartyStatus(models.Model):
         related_name='counterparty_statuses',
     )
     name = models.CharField(max_length=100)
+    code = models.CharField(max_length=50, null=True, blank=True)
+    translations = models.JSONField(default=dict, blank=True)
+    is_system = models.BooleanField(default=False)
     color = models.CharField(max_length=7, default='#999999')
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['company', 'name'], name='unique_counterparty_status_per_company'),
+            models.UniqueConstraint(fields=['company', 'code'], name='unique_counterparty_status_code_per_company'),
         ]
+
+    def display_name(self, language=None):
+        from core.statuses import status_display_name
+        return status_display_name(self, language)
 
     def __str__(self):
         return self.name

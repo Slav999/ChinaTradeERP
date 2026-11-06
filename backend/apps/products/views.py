@@ -11,13 +11,16 @@ from .models import CompanySettings, Product, ProductCategory, Unit, ProductChan
 from .serializers import ProductSerializer, ProductCategorySerializer, UnitSerializer, ProductChangeLogSerializer, \
     CompanySettingsSerializer, ProductListSerializer
 from .currency import refresh_company_rates
+from users.permissions import HasCompanyAccessPermission
 
 
 class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
     pagination_class = StandardResultsSetPagination
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompanyAccessPermission]
+    access_view_permission = 'products.view'
+    access_manage_permission = 'products.manage'
 
     def get_queryset(self):
         queryset = Product.objects.filter(
@@ -34,6 +37,7 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 
         search = self.request.query_params.get('search', '').strip()
         category_id = self.request.query_params.get('category')
+        category_query = self.request.query_params.get('category_query', '').strip()
         supplier_query = self.request.query_params.get('supplier_query', '').strip()
 
         if search:
@@ -43,6 +47,8 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
             )
         if category_id:
             queryset = queryset.filter(category_id=category_id)
+        if category_query:
+            queryset = queryset.filter(category__name__icontains=category_query)
         if supplier_query:
             queryset = queryset.filter(supplier__name__icontains=supplier_query)
 
@@ -79,7 +85,7 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
         fields = [
             'name', 'sku', 'description', 'category_id',
             'unit_id', 'supplier_id', 'quantity', 'is_stock_item',
-            'purchase_price', 'sale_price', 'image'
+            'purchase_price', 'sale_price', 'sale_price_mode', 'image'
         ]
         for field in fields:
             old_val = getattr(old, field)
@@ -154,7 +160,9 @@ class ProductViewSet(BaseAuditViewSet, ChangeLogHistoryMixin):
 class ProductCategoryViewSet(viewsets.ModelViewSet):
     queryset = ProductCategory.objects.all()
     serializer_class = ProductCategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompanyAccessPermission]
+    access_view_permission = 'products.view'
+    access_manage_permission = 'products.manage'
 
     def get_queryset(self):
         return ProductCategory.objects.filter(company=self.request.user.company).order_by('name')
@@ -183,6 +191,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         for product in Product.objects.filter(
             company=category.company,
             category=category,
+            sale_price_mode=Product.SALE_PRICE_MODE_AUTOMATIC,
         ).select_related('category', 'supplier'):
             product.sale_price = product.calculate_sale_price(settings)
             product.save(update_fields=['sale_price'])
@@ -203,7 +212,9 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
 class UnitViewSet(viewsets.ModelViewSet):
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompanyAccessPermission]
+    access_view_permission = 'products.view'
+    access_manage_permission = 'products.manage'
 
     def get_queryset(self):
         return Unit.objects.filter(company=self.request.user.company).order_by('name')

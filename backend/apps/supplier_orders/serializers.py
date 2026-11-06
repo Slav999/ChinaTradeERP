@@ -12,8 +12,10 @@ from .models import (
 from counterparties.models import Counterparty
 from products.models import Product
 from core.serializers import AuditFieldsMixinSerializer, ChangeLogBaseSerializer
+from core.statuses import TranslatableStatusSerializerMixin
 from counterparties.serializers import CounterpartySerializer
 from products.serializers import ProductSerializer, UnitSerializer
+from users.access import user_has_permission
 
 
 def _supplier_order_items_total_cny(order):
@@ -58,11 +60,14 @@ class LinkedCustomerOrderSerializer(serializers.ModelSerializer):
         fields = ('id', 'order_number')
 
 
-class SupplierOrderStatusSerializer(serializers.ModelSerializer):
+class SupplierOrderStatusSerializer(TranslatableStatusSerializerMixin, serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
     class Meta:
         model = SupplierOrderStatus
         fields = '__all__'
-        read_only_fields = ('company',)
+        read_only_fields = ('company', 'code', 'is_system')
+        extra_kwargs = {'name': {'required': False}}
 
     def validate_name(self, value):
         name = value.strip()
@@ -100,14 +105,50 @@ class SupplierOrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierOrderItem
         fields = (
-            'id', 'order', 'product', 'product_id', 'quantity', 'unit',
+            'id', 'order', 'product', 'product_id', 'quantity', 'defective_quantity', 'unit',
             'unit_price_cny', 'comment',
         )
-        read_only_fields = ('unit_price_cny',)
+        extra_kwargs = {
+            'unit_price_cny': {'required': False, 'allow_null': False},
+        }
+
+    def validate_unit_price_cny(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Purchase price cannot be negative.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        if 'unit_price_cny' in attrs and not user_has_permission(
+            getattr(request, 'user', None), 'pricing.purchase.manage'
+        ):
+            raise serializers.ValidationError({
+                'unit_price_cny': 'You do not have permission to change the purchase price.'
+            })
+        quantity = attrs.get('quantity', getattr(self.instance, 'quantity', Decimal('0.00')))
+        defective = attrs.get(
+            'defective_quantity',
+            getattr(self.instance, 'defective_quantity', Decimal('0.00')),
+        )
+        if defective < 0:
+            raise serializers.ValidationError({'defective_quantity': 'Defective quantity cannot be negative.'})
+        if defective > quantity:
+            raise serializers.ValidationError({'defective_quantity': 'Defective quantity cannot exceed quantity.'})
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.purchase.view'):
+            data.pop('unit_price_cny', None)
+        return data
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.purchase.view'):
+            self.fields.pop('unit_price_cny', None)
         if request and request.user.is_authenticated:
             company = request.user.company
             self.fields['order'].queryset = SupplierOrder.objects.filter(
@@ -145,14 +186,23 @@ class SupplierOrderListSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierOrder
         fields = (
-            'id', 'order_number', 'supplier', 'customer',
+            'is_sample', 'trip_name', 'id', 'order_number', 'order_year', 'is_previous_year', 'created_at', 'supplier', 'customer',
             'planned_receipt_date', 'shipment_date', 'delivery_date',
-            'amount_cny', 'status', 'payment_details_qr', 'track_number'
+            'amount_cny', 'status', 'payment_details_qr', 'track_number', 'sent_at',
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.purchase.view'):
+            self.fields.pop('amount_cny', None)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        if instance.amount_cny is None:
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.purchase.view'):
+            data.pop('amount_cny', None)
+        if 'amount_cny' in data and instance.amount_cny is None:
             data['amount_cny'] = str(_supplier_order_items_total_cny(instance))
         qr_url = _supplier_order_qr_url(instance, self.context.get('request'))
         if qr_url:
@@ -190,10 +240,10 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
     class Meta:
         model = SupplierOrder
         fields = (
-            'id', 'order_number', 'created_at', 'updated_at', 'created_by', 'updated_by',
+            'is_sample', 'trip_name', 'id', 'order_number', 'order_year', 'is_previous_year', 'created_at', 'updated_at', 'created_by', 'updated_by',
             'status', 'status_id', 'supplier_id', 'supplier', 'customer_id', 'customer',
             'customer_order',
-            'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
+            'planned_receipt_date', 'shipment_date', 'sent_at', 'china_exit_date', 'delivery_date',
             'shipping_address', 'shipping_code', 'supplier_comment', 'internal_comment',
             'amount_cny', 'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date',
             'cny_to_local_rate', 'company_currency_code', 'company_currency_symbol',
@@ -206,7 +256,12 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        if instance.amount_cny is None:
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.purchase.view'):
+            data.pop('amount_cny', None)
+        if request and not user_has_permission(request.user, 'company.settings.manage'):
+            data.pop('cny_to_local_rate', None)
+        if 'amount_cny' in data and instance.amount_cny is None:
             data['amount_cny'] = str(_supplier_order_items_total_cny(instance))
         qr_url = _supplier_order_qr_url(instance, self.context.get('request'))
         if qr_url:
@@ -214,7 +269,16 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         return data
 
     def validate(self, attrs):
+        if self.instance and attrs.get('is_sample', self.instance.is_sample) != self.instance.is_sample:
+            raise serializers.ValidationError({'is_sample': 'Order type cannot be changed after creation.'})
         request = self.context.get('request')
+        if (
+            'amount_cny' in attrs
+            and not user_has_permission(getattr(request, 'user', None), 'pricing.purchase.manage')
+        ):
+            raise serializers.ValidationError({
+                'amount_cny': 'You do not have permission to change the purchase amount.'
+            })
         supplier = attrs.get('supplier', getattr(self.instance, 'supplier', None))
         customer = attrs.get('customer', getattr(self.instance, 'customer', None))
         status = attrs.get('status', getattr(self.instance, 'status', None))
@@ -235,6 +299,11 @@ class SupplierOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if request and not user_has_permission(user, 'pricing.purchase.view'):
+            self.fields.pop('amount_cny', None)
+        if request and not user_has_permission(user, 'company.settings.manage'):
+            self.fields.pop('cny_to_local_rate', None)
         if request and request.user.is_authenticated:
             company = request.user.company
             self.fields['status_id'].queryset = SupplierOrderStatus.objects.filter(company=company)

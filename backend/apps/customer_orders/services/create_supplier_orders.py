@@ -8,7 +8,7 @@ from supplier_orders.models import (
     SupplierOrderItem,
     SupplierOrderStatus,
 )
-from warehouse.services import sync_supplier_order
+from warehouse.services import sync_customer_order, sync_supplier_order
 
 
 class SupplierOrderCreationError(Exception):
@@ -44,11 +44,12 @@ def _company_currency_payload(order):
     }
 
 
-def _status_payload(status):
+def _status_payload(status, language=None):
     if not status:
         return None
     return {
-        'name': status.name,
+        'name': status.display_name(language),
+        'display_name': status.display_name(language),
         'color': status.color,
     }
 
@@ -56,7 +57,9 @@ def _status_payload(status):
 def customer_order_total_after_discount(order):
     total = Decimal('0.00')
     for item in order.items.select_related('product'):
-        unit_price = item.product.sale_price or Decimal('0.00')
+        unit_price = item.unit_sale_price
+        if unit_price is None:
+            unit_price = item.product.sale_price or Decimal('0.00')
         quantity = item.quantity or Decimal('0.00')
         line_discount = item.discount_pct or Decimal('0.0000')
         total += unit_price * quantity * (Decimal('1.0000') - line_discount)
@@ -65,21 +68,24 @@ def customer_order_total_after_discount(order):
     return (total * (Decimal('1.0000') - order_discount)).quantize(Decimal('0.01'))
 
 
-def customer_order_card(order):
+def customer_order_card(order, *, include_financial=True):
     currency = _company_currency_payload(order)
-    total = customer_order_total_after_discount(order)
-
-    return {
+    card = {
         'id': order.id,
         'doc_type': 'customer_order',
         'order_number': order.order_number,
         'created_at': order.created_at,
-        'status': _status_payload(order.status),
-        'total_amount': _money(total),
-        'amount_company_currency': _money(total),
+        'status': _status_payload(order.status, order.company.language_code),
         'company_currency_code': currency['company_currency_code'],
         'company_currency_symbol': currency['company_currency_symbol'],
     }
+    if include_financial:
+        total = customer_order_total_after_discount(order)
+        card.update({
+            'total_amount': _money(total),
+            'amount_company_currency': _money(total),
+        })
+    return card
 
 
 def supplier_order_items_total_cny(order):
@@ -92,36 +98,45 @@ def supplier_order_items_total_cny(order):
     return total.quantize(Decimal('0.01'))
 
 
-def supplier_order_card(order):
+def supplier_order_card(order, *, include_financial=True):
     currency = {
         'company_currency_code': order.company_currency_code or order.company.base_currency_code,
         'company_currency_symbol': order.company_currency_symbol or order.company.base_currency_symbol,
         'cny_to_local_rate': order.cny_to_local_rate,
     }
-    if order.amount_cny is not None:
-        total = order.amount_cny
-    else:
-        total = supplier_order_items_total_cny(order)
-    total_local = total * currency['cny_to_local_rate']
-
-    return {
+    card = {
         'id': order.id,
         'doc_type': 'supplier_order',
         'order_number': order.order_number,
         'created_at': order.created_at,
-        'status': _status_payload(order.status),
-        'total_amount': _money(total),
-        'amount_original': _money(total),
-        'currency_original': 'CNY',
-        'currency_original_symbol': '¥',
-        'amount_company_currency': _money(total_local),
+        'status': _status_payload(order.status, order.company.language_code),
         'company_currency_code': currency['company_currency_code'],
         'company_currency_symbol': currency['company_currency_symbol'],
         'supplier_name': order.supplier.name if order.supplier else '',
     }
+    if include_financial:
+        if order.amount_cny is not None:
+            total = order.amount_cny
+        else:
+            total = supplier_order_items_total_cny(order)
+        total_local = total * currency['cny_to_local_rate']
+        card.update({
+            'total_amount': _money(total),
+            'amount_original': _money(total),
+            'currency_original': 'CNY',
+            'currency_original_symbol': '¥',
+            'amount_company_currency': _money(total_local),
+        })
+    return card
 
 
-def build_customer_order_related_documents(customer_order):
+def build_customer_order_related_documents(
+    customer_order,
+    *,
+    include_customer_financial=True,
+    include_supplier_financial=True,
+    include_supplier_orders=True,
+):
     children = (
         customer_order.supplier_orders
         .select_related('supplier', 'status')
@@ -129,16 +144,27 @@ def build_customer_order_related_documents(customer_order):
         .order_by('created_at', 'id')
     )
     return {
-        'root': customer_order_card(customer_order),
-        'children': [supplier_order_card(order) for order in children],
+        'root': customer_order_card(customer_order, include_financial=include_customer_financial),
+        'children': (
+            [supplier_order_card(order, include_financial=include_supplier_financial) for order in children]
+            if include_supplier_orders else []
+        ),
     }
 
 
-def build_supplier_order_related_documents(supplier_order):
+def build_supplier_order_related_documents(
+    supplier_order,
+    *,
+    include_customer_financial=True,
+    include_supplier_financial=True,
+):
     if not supplier_order.customer_order_id:
         return {
             'root': None,
-            'children': [supplier_order_card(supplier_order)],
+            'children': [supplier_order_card(
+                supplier_order,
+                include_financial=include_supplier_financial,
+            )],
         }
 
     supplier_orders = (
@@ -148,8 +174,14 @@ def build_supplier_order_related_documents(supplier_order):
         .order_by('created_at', 'id')
     )
     return {
-        'root': customer_order_card(supplier_order.customer_order),
-        'children': [supplier_order_card(order) for order in supplier_orders],
+        'root': customer_order_card(
+            supplier_order.customer_order,
+            include_financial=include_customer_financial,
+        ),
+        'children': [supplier_order_card(
+            order,
+            include_financial=include_supplier_financial,
+        ) for order in supplier_orders],
     }
 
 
@@ -258,12 +290,12 @@ def create_supplier_orders_for_customer_order(customer_order, user):
                     if amount_changed:
                         update_fields.append('amount_cny')
                     supplier_order.save(update_fields=update_fields)
-                    sync_supplier_order(supplier_order, user)
                     updated_orders.append(supplier_order)
                 elif amount_changed:
                     supplier_order.updated_by = user
                     supplier_order.save(update_fields=['amount_cny', 'updated_by'])
                     updated_orders.append(supplier_order)
+                sync_supplier_order(supplier_order, user)
                 continue
 
             supplier_order = SupplierOrder.objects.create(
@@ -274,7 +306,7 @@ def create_supplier_orders_for_customer_order(customer_order, user):
                 status=default_status,
                 planned_receipt_date=customer_order.planned_receipt_date,
                 shipment_date=customer_order.shipment_date,
-                shipping_address=customer_order.shipping_address,
+                shipping_address=customer_order.company.china_warehouse_address,
                 shipping_code=customer_order.shipping_code,
                 created_by=user,
                 updated_by=user,
@@ -291,6 +323,8 @@ def create_supplier_orders_for_customer_order(customer_order, user):
             supplier_order.save(update_fields=['amount_cny'])
             sync_supplier_order(supplier_order, user)
             created_orders.append(supplier_order)
+
+        sync_customer_order(customer_order, user)
 
     return {
         'created': created_orders,

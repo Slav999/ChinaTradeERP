@@ -2,16 +2,24 @@
   <div class="container mt-4">
     <!-- Заголовок + «Назад» -->
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h1>{{ isEdit ? 'Edit Order' : 'New Order' }}</h1>
-      <div>
+      <h1>{{ $t(isSamples ? (isEdit ? 'Edit sample order' : 'New sample order') : (isEdit ? 'Edit Order' : 'New Order')) }}</h1>
+      <div class="order-actions">
+        <ChatShareButton v-if="selectedId" type="supplier_order" :record-id="Number(selectedId)" :title="`Заказ поставщику №${orderForm.order_number || selectedId}`" />
+        <RelatedChatsButton v-if="selectedId" type="supplier_order" :record-id="Number(selectedId)" :title="`Заказ поставщику №${orderForm.order_number || selectedId}`" />
+        <div v-if="canManageOrders" class="send-action">
         <button
-            class="btn btn-primary me-2"
-            :disabled="isSending"
+            class="btn btn-primary"
+            :disabled="isSending || !isEdit || !orderItems.length || hasUnsavedChanges"
+            :title="$t(!orderItems.length ? 'Add at least one position before sending the order.' : (hasUnsavedChanges ? 'Save changes before sending the order.' : ''))"
             @click="sendToSupplier"
         >
           {{ isSending ? 'Sending...' : 'Send to Supplier' }}
         </button>
-        <button type="button" class="btn btn-success me-2" :disabled="isSaving" @click="saveOrder">
+          <div v-if="orderForm.sent_at" class="sent-note">
+            Sent {{ formatDate(orderForm.sent_at) }}
+          </div>
+        </div>
+        <button v-if="canManageOrders" type="button" class="btn btn-success" :disabled="isSaving" @click="saveOrder">
           {{ isSaving ? 'Saving...' : (isEdit ? 'Update Order' : 'Create Order') }}
         </button>
         <button class="btn btn-secondary" @click="goBack">← Back to Orders</button>
@@ -39,10 +47,10 @@
             class="nav-link"
             :class="{ active: activeTab==='positions' }"
             @click="activeTab = 'positions'"
-        >Positions
+        >Positions <span class="badge bg-secondary ms-1">{{ orderItems.length }}</span>
         </button>
       </li>
-      <li class="nav-item">
+      <li v-if="!isSamples" class="nav-item">
         <button
             class="nav-link"
             :class="{ active: activeTab==='docs' }"
@@ -91,11 +99,12 @@
 
         <!-- ▼ ФОРМА ЗАКАЗА (полностью из исходного файла) ▼ -->
         <form @submit.prevent="saveOrder">
-          <div class="row gx-2 gy-2 order-form-grid">
+          <fieldset :disabled="!canManageOrders" class="p-0 m-0 border-0">
+          <div class="row gx-2 gy-2 order-form-grid" :class="{ 'sample-form': isSamples }">
             <div class="row gx-2 gy-2">
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Order Number</label>
-                <input v-model="orderForm.order_number" class="form-control form-control-sm" required/>
+                <input v-model="orderForm.order_number" class="form-control form-control-sm" readonly/>
               </div>
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Status</label>
@@ -103,23 +112,50 @@
               </div>
               <div class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Supplier</label>
-                <select v-model="orderForm.supplier_id" class="form-select form-select-sm">
-                  <option disabled value="">Select supplier...</option>
-                  <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
-                </select>
+                <div class="input-group input-group-sm">
+                  <SearchableCounterpartySelect
+                      v-model="orderForm.supplier_id"
+                      :options="suppliers"
+                      placeholder="Select supplier..."
+                      size="sm"
+                  />
+                  <IconButton
+                      icon="plus-lg"
+                      variant="outline-secondary"
+                      size="sm"
+                      :title="$t('Create supplier')"
+                      @click="openCounterpartyModal('supplier')"
+                  />
+                </div>
               </div>
-              <div class="col-6 col-md-4 col-lg-3 mb-2">
+              <div v-if="!isSamples" class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Customer</label>
-                <select v-model="orderForm.customer_id" class="form-select form-select-sm">
-                  <option disabled value="">Select customer...</option>
-                  <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
-                </select>
+                <div class="input-group input-group-sm">
+                  <SearchableCounterpartySelect
+                      v-model="orderForm.customer_id"
+                      :options="customers"
+                      placeholder="Select customer..."
+                      size="sm"
+                  />
+                  <IconButton
+                      icon="plus-lg"
+                      variant="outline-secondary"
+                      size="sm"
+                      :title="$t('Create customer')"
+                      @click="openCounterpartyModal('customer')"
+                  />
+                </div>
               </div>
-              <div class="col-md-4">
+              <div v-if="isSamples" class="col-12">
+                <label for="sample-trip" class="form-label small">{{ $t('Trip / exhibition / meeting') }}</label>
+                <input id="sample-trip" v-model.trim="orderForm.trip_name" maxlength="255" class="form-control form-control-sm"
+                    :placeholder="$t('For example: Guangzhou exhibition')" />
+              </div>
+              <div v-if="!isSamples" class="col-md-4">
                 <label class="form-label small">Plan Receipt</label>
                 <input v-model="orderForm.planned_receipt_date" type="date" class="form-control form-control-sm"/>
               </div>
-              <div class="col-md-4">
+              <div v-if="!isSamples" class="col-md-4">
                 <label class="form-label small">Shipment</label>
                 <input v-model="orderForm.shipment_date" type="date" class="form-control form-control-sm"/>
               </div>
@@ -127,19 +163,19 @@
                 <label class="form-label small">Delivery</label>
                 <input v-model="orderForm.delivery_date" type="date" class="form-control form-control-sm"/>
               </div>
-              <div class="col-12 compact-text-field">
+              <div v-if="!isSamples" class="col-12 compact-text-field">
                 <label class="form-label small">Shipping Address</label>
                 <textarea v-model="orderForm.shipping_address" class="form-control form-control-sm" rows="2"></textarea>
               </div>
-              <div class="col-12 compact-text-field">
+              <div v-if="!isSamples" class="col-12 compact-text-field">
                 <label class="form-label small">Supplier Comment</label>
                 <textarea v-model="orderForm.supplier_comment" class="form-control form-control-sm" rows="2"></textarea>
               </div>
-              <div class="col-12 compact-text-field">
-                <label class="form-label small">Internal Comment</label>
-                <textarea v-model="orderForm.internal_comment" class="form-control form-control-sm" rows="3"></textarea>
+              <div class="col-12 compact-text-field sample-comment">
+                <label class="form-label small">{{ $t('Comment') }}</label>
+                <textarea v-model="orderForm.internal_comment" class="form-control form-control-sm" :rows="isSamples ? 2 : 3"></textarea>
               </div>
-              <div class="col-md-4">
+              <div v-if="canViewPurchasePrice" class="col-md-4">
                 <label class="form-label small">Amount CNY</label>
                 <input v-model="orderForm.amount_cny" type="number" step="0.01" class="form-control form-control-sm"/>
               </div>
@@ -147,15 +183,15 @@
                 <label class="form-label small">Track Number</label>
                 <input v-model="orderForm.track_number" class="form-control form-control-sm"/>
               </div>
-              <div class="col-md-4">
+              <div v-if="!isSamples" class="col-md-4">
                 <label class="form-label small">China Exit Date</label>
                 <input v-model="orderForm.china_exit_date" type="date" class="form-control form-control-sm"/>
               </div>
-              <div class="col-6 col-md-4 col-lg-3 mb-2">
+              <div v-if="!isSamples" class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Logistic Invoice#</label>
                 <input v-model="orderForm.logistic_invoice_no" class="form-control form-control-sm"/>
               </div>
-              <div class="col-6 col-md-4 col-lg-3 mb-2">
+              <div v-if="!isSamples" class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Production Due</label>
                 <input v-model="orderForm.production_due_date" type="date" class="form-control form-control-sm"/>
               </div>
@@ -164,12 +200,12 @@
                 <input v-model="orderForm.payment_date" type="date" class="form-control form-control-sm"/>
               </div>
 
-              <div class="col-6 col-md-4 col-lg-3 mb-2">
+              <div v-if="!isSamples" class="col-6 col-md-4 col-lg-3 mb-2">
                 <label class="form-label small">Shipping Code</label>
                 <input v-model="orderForm.shipping_code" class="form-control form-control-sm"/>
               </div>
 
-              <div class="col-6 payment-qr-col">
+              <div v-if="!isSamples || orderForm.payment_details_qr || qrPreview" class="col-6 payment-qr-col">
                 <label class="form-label small">Payment QR</label>
                 <div
                     v-if="orderForm.payment_details_qr || qrPreview"
@@ -187,12 +223,13 @@
               </div>
             </div>
           </div>
+          </fieldset>
         </form>
         <!-- ▲ ФОРМА ▲ -->
       </div>
     </transition>
     <transition>
-      <div v-if="activeTab==='docs'">
+      <div v-if="!isSamples && activeTab==='docs'">
         <RelatedDocumentsTree
             v-if="relatedRoot"
             :root="relatedRoot"
@@ -210,6 +247,7 @@
         <div class="compact-files-block">
           <label class="form-label small">Attachments</label>
           <input
+              v-if="canManageOrders"
               type="file"
               multiple
               class="form-control form-control-sm"
@@ -224,12 +262,15 @@
               >
                 {{ attachmentName(att) }}
               </a>
-              <button
-                  class="btn btn-sm btn-outline-danger ms-2"
+              <IconButton
+                  v-if="canManageOrders"
+                  icon="trash"
+                  variant="outline-danger"
+                  size="sm"
+                  class="ms-2"
                   @click="deleteAttachment(att.id)"
-                  title="Delete"
-              >&times;
-              </button>
+                  :title="$t('Delete attachment')"
+              />
             </li>
           </ul>
         </div>
@@ -238,13 +279,13 @@
     <transition>
       <div v-if="activeTab==='positions'">
         <!-- 1) поиск -->
-        <div class="position-search position-relative compact-position-search mb-3">
+        <div v-if="canManageOrders" class="position-search position-relative compact-position-search mb-3">
           <input
               v-model="positionSearch"
               @input="fetchProductSuggestions"
               type="text"
               class="form-control form-control-sm"
-              placeholder="Найти товар по имени или SKU..."
+              placeholder="Find product by name or SKU..."
           />
           <ul
               v-if="positionSearch.length >= 1"
@@ -263,7 +304,7 @@
                 class="list-group-item list-group-item-action product-suggestion text-primary p-1"
                 @click="openProductModalWithName"
             >
-              + Создать новый товар: «{{ positionSearch }}»
+              + Create new product: "{{ positionSearch }}"
             </li>
           </ul>
         </div>
@@ -271,13 +312,14 @@
         <!-- 2) существующие позиции -->
         <div class="positions-table-wrap">
           <table class="table table-sm align-middle mb-2 positions-table supplier-positions-table">
-            <thead>
+            <thead v-if="orderItems.length">
             <tr>
-              <th class="product-col">Product</th>
-              <th class="qty-col">Qty</th>
-              <th class="unit-col">Unit</th>
-              <th class="money-col text-end">Purchase price</th>
-              <th class="action-col"></th>
+              <th class="product-col">{{ $t('Product') }}</th>
+              <th class="qty-col">{{ $t('Qty') }}</th>
+              <th class="qty-col">{{ $t('Defect qty') }}</th>
+              <th class="unit-col">{{ $t('Unit') }}</th>
+              <th v-if="canViewPurchasePrice" class="money-col text-end">{{ $t('Purchase price') }}</th>
+              <th v-if="canManageOrders" class="action-col"></th>
             </tr>
             </thead>
             <tbody>
@@ -289,20 +331,51 @@
                     type="number"
                     step="0.01"
                     class="form-control form-control-sm qty-input"
+                    :disabled="!canManageOrders"
                     v-model.number="item.quantity"
                     @change="updatePosition(item)"
                 />
               </td>
+              <td class="qty-col">
+                <input
+                    v-model.number="item.defective_quantity"
+                    type="number"
+                    min="0"
+                    :max="item.quantity"
+                    step="0.01"
+                    class="form-control form-control-sm qty-input"
+                    :disabled="!canManageOrders"
+                    @change="updatePosition(item)"
+                />
+              </td>
               <td class="unit-col">{{ item.product.unit?.name || '—' }}</td>
-              <td class="money-col text-end">{{ formatPrice(item.product.purchase_price) }}</td>
-              <td class="action-col">
-                <button class="btn btn-sm btn-outline-danger position-remove-btn"
-                        @click="removeItem(item.id)">×
-                </button>
+              <td v-if="canViewPurchasePrice" class="money-col">
+                <div class="input-group input-group-sm">
+                  <input
+                      v-model.number="item.unit_price_cny"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      class="form-control text-end"
+                      :disabled="!canEditPurchasePrice"
+                      @change="updatePosition(item)"
+                  />
+                  <IconButton
+                      v-if="canEditPurchasePrice"
+                      icon="arrow-counterclockwise"
+                      variant="outline-secondary"
+                      size="sm"
+                      :title="$t('Restore product purchase price')"
+                      @click="resetPurchasePrice(item)"
+                  />
+                </div>
+              </td>
+              <td v-if="canManageOrders" class="action-col">
+                <IconButton icon="trash" variant="outline-danger" size="sm" :title="$t('Remove position')" @click="removeItem(item.id)" />
               </td>
             </tr>
             <tr v-if="!orderItems.length">
-              <td colspan="5" class="text-center text-muted">No positions yet.</td>
+              <td :colspan="supplierPositionColumnCount" class="text-center text-muted">{{ $t('No positions yet.') }}</td>
             </tr>
             </tbody>
           </table>
@@ -366,10 +439,25 @@
         :categories="categories"
         :units="units"
         :suppliers="suppliers"
+        :read-only="!canManageProducts"
+        :can-view-purchase-price="canViewPurchasePrice"
+        :can-edit-purchase-price="canEditPurchasePrice"
+        :can-view-cost-price="canViewCostPrice"
+        :can-view-cost-breakdown="canViewCostBreakdown"
+        :can-view-sale-price="canViewSalePrice"
+        :can-edit-sale-price="canEditCatalogSalePrice"
         @saved="onProductSaved"
         @reference-created="onReferenceCreated"
         @open-history="openProductHistory"
         @close="showProductModal = false"
+    />
+
+    <CounterpartyQuickAddModal
+        :visible="showCounterpartyModal"
+        :role="counterpartyModalRole"
+        :title="counterpartyModalTitle"
+        @saved="onCounterpartySaved"
+        @close="showCounterpartyModal = false"
     />
 
     <div
@@ -450,18 +538,28 @@
 
 <script>
 import axios from '../axios';
+import ChatShareButton from '../components/ChatShareButton.vue';
+import RelatedChatsButton from '../components/RelatedChatsButton.vue';
+import CounterpartyQuickAddModal from "../components/CounterpartyQuickAddModal.vue";
 import ProductAddEditModal from "../components/ProductAddEditModal.vue";
 import RelatedDocumentsTree from "../components/RelatedDocumentsTree.vue";
+import SearchableCounterpartySelect from "../components/SearchableCounterpartySelect.vue";
 import StatusSelect from "../components/StatusSelect.vue";
+import IconButton from "../components/IconButton.vue";
+import { clearCacheByPrefix } from "../utils/pageCache";
+import { accessState, hasPermission, PERMISSIONS } from '../access';
 
 export default {
   name: 'SupplierOrderDetail',
-  components: {ProductAddEditModal, RelatedDocumentsTree, StatusSelect},
+  components: {RelatedChatsButton, ChatShareButton, CounterpartyQuickAddModal, ProductAddEditModal, RelatedDocumentsTree, SearchableCounterpartySelect, StatusSelect, IconButton},
   data() {
     return {
       isSending: false,
       activeTab: 'order',
+      suppressLeaveGuard: false,
       showProductModal: false,
+      showCounterpartyModal: false,
+      counterpartyModalRole: 'supplier',
       editingProduct: null,
       addProductToOrderAfterSave: false,
       orderItems: [],
@@ -479,15 +577,16 @@ export default {
       units: [],
       customers: [],
       statuses: [],
+      defaultSupplierShippingAddress: '',
 
       /* форма */
       defaultForm: {
-        order_number: '', status_id: '', supplier_id: '', customer_id: '',
+        trip_name: '', order_number: '', status_id: '', supplier_id: '', customer_id: '',
         planned_receipt_date: '', shipment_date: '', delivery_date: '',
         china_exit_date: '', shipping_address: '', shipping_code: '',
         supplier_comment: '', internal_comment: '', amount_cny: '', track_number: '',
         logistic_invoice_no: '', production_due_date: '',
-        payment_date: '', payment_details_qr: null
+        payment_date: '', payment_details_qr: null, sent_at: null
       },
       orderForm: {},
 
@@ -513,6 +612,35 @@ export default {
   },
 
   computed: {
+    isSamples() { return !!this.$route.meta.samples || !!this.orderForm.is_sample; },
+    sectionPath() { return this.isSamples ? '/samples-trips' : '/supplier-orders'; },
+    canManageOrders() {
+      return hasPermission(PERMISSIONS.SUPPLIER_ORDERS_MANAGE, accessState.user);
+    },
+    canManageProducts() {
+      return hasPermission(PERMISSIONS.PRODUCTS_MANAGE, accessState.user);
+    },
+    canViewPurchasePrice() {
+      return hasPermission(PERMISSIONS.PURCHASE_PRICE_VIEW, accessState.user);
+    },
+    canEditPurchasePrice() {
+      return this.canManageOrders && hasPermission(PERMISSIONS.PURCHASE_PRICE_MANAGE, accessState.user);
+    },
+    canViewCostPrice() {
+      return hasPermission(PERMISSIONS.COST_PRICE_VIEW, accessState.user);
+    },
+    canViewCostBreakdown() {
+      return hasPermission(PERMISSIONS.COMPANY_SETTINGS_MANAGE, accessState.user);
+    },
+    canViewSalePrice() {
+      return hasPermission(PERMISSIONS.SALE_PRICE_VIEW, accessState.user);
+    },
+    canEditCatalogSalePrice() {
+      return hasPermission(PERMISSIONS.CATALOG_SALE_PRICE_MANAGE, accessState.user);
+    },
+    supplierPositionColumnCount() {
+      return 4 + (this.canViewPurchasePrice ? 1 : 0) + (this.canManageOrders ? 1 : 0);
+    },
     isEdit() {
       return !!this.selectedId;
     },
@@ -523,7 +651,10 @@ export default {
       return this.relatedRoot ? this.relatedDocs.length : 0;
     },
     hasUnsavedChanges() {
-      return this.savedSnapshot !== this.currentSnapshot();
+      return this.canManageOrders && this.savedSnapshot !== this.currentSnapshot();
+    },
+    counterpartyModalTitle() {
+      return this.counterpartyModalRole === 'supplier' ? 'Add Supplier' : 'Add Customer';
     }
   },
 
@@ -558,16 +689,30 @@ export default {
     }
   },
 
+  beforeRouteLeave(to, from, next) {
+    if (this.suppressLeaveGuard) {
+      next();
+      return;
+    }
+    this.confirmUnsavedChanges({skipRedirect: true})
+      .then(canLeave => next(canLeave))
+      .catch(() => next(false));
+  },
+
   methods: {
     async sendToSupplier() {
-    if (!confirm('Отправить заказ поставщику?')) return;
+      if (!this.isEdit || !this.orderItems.length || this.hasUnsavedChanges) return;
+    if (!confirm('Send order to supplier?')) return;
     this.isSending = true;
     try {
-      await axios.post(`/api/supplier-order/${this.selectedId}/send/`);
+      const { data } = await axios.post(`/api/supplier-order/${this.selectedId}/send/`);
+      this.orderForm.sent_at = data.sent_at || new Date().toISOString();
+      clearCacheByPrefix('supplier-orders:');
+      this.updateSavedSnapshot();
       this.showSaveToast('Order sent');
     } catch (e) {
       console.error(e);
-      alert('Не удалось отправить заказ.');
+      alert('Unable to send order.');
     } finally {
       this.isSending = false;
     }
@@ -581,6 +726,25 @@ export default {
       this.editingProduct = {name: this.positionSearch};
       this.addProductToOrderAfterSave = true;
       this.showProductModal = true;
+    },
+    openCounterpartyModal(role) {
+      this.counterpartyModalRole = role;
+      this.showCounterpartyModal = true;
+    },
+    onCounterpartySaved(counterparty) {
+      if (counterparty.is_supplier && !this.suppliers.some(item => item.id === counterparty.id)) {
+        this.suppliers.push(counterparty);
+      }
+      if (counterparty.is_customer && !this.customers.some(item => item.id === counterparty.id)) {
+        this.customers.push(counterparty);
+      }
+      if (this.counterpartyModalRole === 'supplier' && counterparty.is_supplier) {
+        this.orderForm.supplier_id = counterparty.id;
+      }
+      if (this.counterpartyModalRole === 'customer' && counterparty.is_customer) {
+        this.orderForm.customer_id = counterparty.id;
+      }
+      this.showCounterpartyModal = false;
     },
     // 1) подсказки
     async fetchProductSuggestions() {
@@ -603,6 +767,8 @@ export default {
         id: `tmp-${Date.now()}-${product.id}`,
         product,
         quantity: 1,
+        defective_quantity: 0,
+        unit_price_cny: this.numberOrZero(product.purchase_price),
         comment: '',
       });
       this.positionSearch = ''
@@ -624,6 +790,7 @@ export default {
     },
 
     async fetchRelatedDocuments() {
+      if (this.isSamples) return;
       if (!this.selectedId) return;
       const {data} = await axios.get(`/api/supplier-order/${this.selectedId}/related-documents/`);
       this.relatedRoot = data.root;
@@ -643,8 +810,9 @@ export default {
       }
 
       const fd = new FormData();
+        if (!this.isEdit) fd.append('is_sample', this.isSamples ? 'true' : 'false');
       const allowed = [
-        'status_id', 'supplier_id', 'customer_id',
+        'trip_name', 'status_id', 'supplier_id', 'customer_id',
         'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
         'shipping_address', 'shipping_code', 'supplier_comment', 'internal_comment', 'amount_cny',
         'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date', 'order_number',
@@ -668,7 +836,7 @@ export default {
           customer_id: data.customer?.id,
         };
         this.attachments = [];
-        await this.$router.replace(`/supplier-orders/${data.id}`);
+        await this.$router.replace(`${this.sectionPath}/${data.id}`);
         return true;
       } catch (e) {
         console.error('Save error', e.response?.data || e);
@@ -679,6 +847,14 @@ export default {
 
     async updatePosition(item) {
       item.quantity = this.formatQuantityInput(item.quantity);
+      item.defective_quantity = this.formatQuantityInput(item.defective_quantity);
+      item.unit_price_cny = this.formatQuantityInput(item.unit_price_cny);
+      if (item.defective_quantity > item.quantity) {
+        item.defective_quantity = item.quantity;
+      }
+    },
+    resetPurchasePrice(item) {
+      item.unit_price_cny = this.numberOrZero(item.product?.purchase_price);
     },
     async onProductSaved(product) {
       this.showProductModal = false;
@@ -700,6 +876,8 @@ export default {
           id: `tmp-${Date.now()}-${product.id}`,
           product,
           quantity: 1,
+          defective_quantity: 0,
+          unit_price_cny: this.numberOrZero(product.purchase_price),
           comment: '',
         });
         return;
@@ -711,6 +889,8 @@ export default {
         id: `tmp-${Date.now()}-${product.id}`,
         product,
         quantity: 1,
+        defective_quantity: 0,
+        unit_price_cny: this.numberOrZero(product.purchase_price),
         comment: '',
       });
     },
@@ -730,15 +910,13 @@ export default {
       this.leaveToOrders();
     },
     async leaveToOrders() {
-      const canLeave = await this.confirmUnsavedChanges();
-      if (!canLeave) return;
       const query = this.selectedId ? {highlight: this.selectedId} : {};
-      this.$router.push({path: '/supplier-orders', query});
+      this.$router.push({path: this.sectionPath, query});
     },
-    async confirmUnsavedChanges() {
+    async confirmUnsavedChanges(saveOptions = {}) {
       if (!this.hasUnsavedChanges) return true;
       if (confirm('Save changes before leaving?')) {
-        const saved = await this.saveOrder({silent: true});
+        const saved = await this.saveOrder({silent: true, ...saveOptions});
         return !!saved;
       }
       return confirm('Leave without saving changes?');
@@ -762,6 +940,7 @@ export default {
     currentSnapshot() {
       return JSON.stringify({
         order: {
+          trip_name: this.orderForm.trip_name || '',
           status_id: this.orderForm.status_id || '',
           supplier_id: this.orderForm.supplier_id || '',
           customer_id: this.orderForm.customer_id || '',
@@ -783,6 +962,8 @@ export default {
           id: item.id,
           product_id: item.product?.id,
           quantity: this.numberOrZero(item.quantity),
+          defective_quantity: this.numberOrZero(item.defective_quantity),
+          unit_price_cny: this.numberOrZero(item.unit_price_cny),
           comment: item.comment || '',
         })),
         attachments: this.attachments.map(file => file.name),
@@ -809,6 +990,8 @@ export default {
       return {
         ...item,
         quantity: this.formatQuantityInput(item.quantity),
+        defective_quantity: this.formatQuantityInput(item.defective_quantity),
+        unit_price_cny: this.numberOrZero(item.unit_price_cny ?? item.product?.purchase_price),
       };
     },
     formatDate(v) {
@@ -837,10 +1020,20 @@ export default {
         this.statuses = stRes.data;
         this.categories = catRes.data;
         this.units = unitRes.data;
+        await this.fetchDefaultSupplierShippingAddress();
+        if (!this.isEdit && !this.orderForm.shipping_address && this.defaultSupplierShippingAddress) {
+          this.orderForm.shipping_address = this.defaultSupplierShippingAddress;
+        }
       } catch (e) {
         console.error(e);
-        alert('Ошибка при загрузке справочников');
+        alert('Unable to load reference data.');
       }
+    },
+
+    async fetchDefaultSupplierShippingAddress() {
+      const {data} = await axios.get('/api/settings/');
+      const settings = Array.isArray(data) ? data[0] : data;
+      this.defaultSupplierShippingAddress = settings?.company_china_warehouse_address || '';
     },
 
     /* --- загрузка/сохранение заказа --- */
@@ -856,12 +1049,13 @@ export default {
         this.qrPreview = o.payment_details_qr;
       } catch (e) {
         console.error(e);
-        alert('Не удалось загрузить заказ');
+        alert('Unable to load order.');
       }
     },
 
     async saveOrder(options = {}) {
       const silent = options?.silent === true;
+      const skipRedirect = options?.skipRedirect === true;
       if (this.isEdit && !this.hasUnsavedChanges) {
         if (!silent) this.showSaveToast('No changes to save');
         return this.orderForm;
@@ -871,15 +1065,16 @@ export default {
       try {
         /* 1. собираем form-data */
         const fd = new FormData();
+        if (!this.isEdit) fd.append('is_sample', this.isSamples ? 'true' : 'false');
         const allowed = [
-          'status_id', 'supplier_id', 'customer_id',
+          'trip_name', 'status_id', 'supplier_id', 'customer_id',
           'planned_receipt_date', 'shipment_date', 'china_exit_date', 'delivery_date',
           'shipping_address', 'shipping_code', 'supplier_comment', 'internal_comment', 'amount_cny',
           'track_number', 'logistic_invoice_no', 'production_due_date', 'payment_date', 'order_number',
         ];
         allowed.forEach(k => {
           const v = this.orderForm[k];
-          if (v != null && (v !== '' || ['supplier_comment', 'internal_comment'].includes(k))) fd.append(k, v);
+          if (v != null && (v !== '' || ['trip_name', 'shipping_address', 'supplier_comment', 'internal_comment'].includes(k))) fd.append(k, v);
         });
 
         /* QR */
@@ -908,11 +1103,15 @@ export default {
                 order: this.selectedId,
                 product_id: item.product.id,
                 quantity: item.quantity,
+                defective_quantity: item.defective_quantity || 0,
+                unit_price_cny: item.unit_price_cny,
                 comment: item.comment || '',
               });
             } else {
               await axios.patch(`/api/supplier-order-items/${item.id}/`, {
                 quantity: item.quantity,
+                defective_quantity: item.defective_quantity || 0,
+                unit_price_cny: item.unit_price_cny,
                 comment: item.comment || '',
               });
             }
@@ -929,6 +1128,8 @@ export default {
               order: newOrderId,
               product_id: item.product.id,
               quantity: item.quantity,
+              defective_quantity: item.defective_quantity || 0,
+              unit_price_cny: item.unit_price_cny,
               comment: item.comment || '',
             });
           }
@@ -941,9 +1142,14 @@ export default {
             customer_id: res.data.customer?.id,
           };
           if (!silent) this.showSaveToast('Order created');
-          await this.$router.replace(`/supplier-orders/${res.data.id}`);
+          if (!skipRedirect) {
+            this.suppressLeaveGuard = true;
+            await this.$router.replace(`${this.sectionPath}/${res.data.id}`);
+            this.suppressLeaveGuard = false;
+          }
           await this.fetchOrderItems();
           this.attachments = [];
+        clearCacheByPrefix('supplier-orders:');
         this.updateSavedSnapshot();
           return res.data;
           return;                /* компонент перезагрузится watcher-ом */
@@ -951,12 +1157,13 @@ export default {
 
         /* очищаем буферы */
         this.attachments = [];
+        clearCacheByPrefix('supplier-orders:');
         this.updateSavedSnapshot();
         return res.data;
 
       } catch (e) {
         console.error('Save error', e.response?.data || e);
-        alert('Ошибка при сохранении. Проверьте поля.');
+        alert('Unable to save order. Please check the fields.');
       } finally {
         this.isSaving = false;
       }
@@ -964,13 +1171,13 @@ export default {
 
     /* --- вложения --- */
     async deleteAttachment(id) {
-      if (!confirm('Удалить этот файл?')) return;
+      if (!confirm('Delete this file?')) return;
       try {
         await axios.delete(`/api/supplier-order/${this.selectedId}/attachments/${id}/`);
         this.existingAttachments = this.existingAttachments.filter(a => a.id !== id);
       } catch (e) {
         console.error(e);
-        alert('Не удалось удалить файл');
+        alert('Unable to delete file.');
       }
     },
 
@@ -1010,14 +1217,15 @@ export default {
 
     fieldLabel(k) {
       const m = {
-        order_number: 'Order#', supplier_id: 'Supplier', customer_id: 'Customer',
+        trip_name: 'Trip / exhibition / meeting', is_sample: 'Samples and trips', order_number: 'Order#', supplier_id: 'Supplier', customer_id: 'Customer',
         planned_receipt_date: 'Plan Receipt', shipment_date: 'Shipment',
         delivery_date: 'Delivery', amount_cny: 'Amount CNY', track_number: 'Track#',
+        item_unit_price_cny: 'Item purchase price, CNY',
         logistic_invoice_no: 'Logistic Invoice#', china_exit_date: 'China Exit',
         production_due_date: 'Production Due', payment_date: 'Payment Date',
         payment_details_qr: 'Payment QR', shipping_address: 'Address',
         shipping_code: 'Code', supplier_comment: 'Supplier Comment',
-        internal_comment: 'Internal Comment', status_id: 'Status'
+        internal_comment: 'Comment', status_id: 'Status'
       };
       return m[k] || k;
     },
@@ -1094,6 +1302,28 @@ export default {
   display: block;
 }
 
+.order-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.send-action {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sent-note {
+  margin-top: 0.25rem;
+  color: #557066;
+  font-size: 0.76rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .modal-fade-enter-active, .modal-fade-leave-active {
   transition: opacity .3s, transform .3s;
 }
@@ -1143,11 +1373,44 @@ export default {
 .compact-position-search {
   max-width: 520px;
 }
+.sample-form > .row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  max-width: 900px;
+}
+.order-form-grid.sample-form > .row > div[class*="col-"] {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+.sample-form > .row > .col-12 {
+  grid-column: 1 / -1;
+}
+.sample-form .sample-comment { order: 1; }
+.sample-form .payment-qr-col { order: 2; }
+.sample-form .qr-preview-box { width: 120px; height: 120px; padding: 8px; }
+@media (max-width: 575.98px) {
+  .sample-form > .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .compact-text-field {
   max-width: 760px;
 }
 .compact-files-block {
   max-width: 520px;
+}
+.quick-add-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding-right: 0;
+  padding-left: 0;
+  font-weight: 600;
+  line-height: 1;
 }
 .order-form-grid [class*="col-"]:not(.col-12):not(.col-6) {
   flex: 0 0 auto;

@@ -22,7 +22,7 @@
       <!-- Меню с иконками -->
       <div class="collapse navbar-collapse w-100 justify-content-end" id="navbarNav">
         <ul class="navbar-nav d-flex w-100 flex-row justify-content-around justify-content-lg-end">
-          <li class="nav-item mx-lg-3">
+          <li v-if="canViewSupplierOrders" class="nav-item mx-lg-3">
             <RouterLink
                 to="/supplier-orders"
                 class="nav-link text-center"
@@ -32,7 +32,7 @@
               <div class="small mt-1 d-none d-lg-block">Supplier Orders</div>
             </RouterLink>
           </li>
-          <li class="nav-item mx-lg-3">
+          <li v-if="canViewCustomerOrders" class="nav-item mx-lg-3">
             <RouterLink
                 to="/customer-orders"
                 class="nav-link text-center"
@@ -42,7 +42,15 @@
               <div class="small mt-1 d-none d-lg-block">Customer Orders</div>
             </RouterLink>
           </li>
-          <li class="nav-item mx-lg-3">
+          <li v-if="canViewSupplierOrders" class="nav-item mx-lg-3">
+            <RouterLink to="/samples-trips" class="nav-link text-center"
+                :class="{ 'section-active': isSectionActive('/samples-trips') }"
+                :title="$t('Samples and trips')">
+              <i class="bi bi-airplane fs-4 d-inline-block" style="transform: rotate(90deg)"></i>
+              <div class="small mt-1 d-none d-lg-block">{{ $t('Samples and trips') }}</div>
+            </RouterLink>
+          </li>
+          <li v-if="canViewProducts" class="nav-item mx-lg-3">
             <RouterLink
                 to="/products"
                 class="nav-link text-center"
@@ -52,7 +60,7 @@
               <div class="small mt-1 d-none d-lg-block">Products</div>
             </RouterLink>
           </li>
-          <li class="nav-item mx-lg-3">
+          <li v-if="canViewWarehouse" class="nav-item mx-lg-3">
             <RouterLink
                 to="/warehouse"
                 class="nav-link text-center"
@@ -62,7 +70,7 @@
               <div class="small mt-1 d-none d-lg-block">Warehouse</div>
             </RouterLink>
           </li>
-          <li class="nav-item mx-lg-3">
+          <li v-if="canViewCounterparties" class="nav-item mx-lg-3">
             <RouterLink
                 to="/counterparty"
                 class="nav-link text-center"
@@ -71,6 +79,9 @@
               <i class="bi bi-people fs-4"></i>
               <div class="small mt-1 d-none d-lg-block">Counterparties</div>
             </RouterLink>
+          </li>
+          <li class="nav-item mx-lg-3">
+            <NotificationCenter />
           </li>
           <li class="nav-item mx-lg-3">
             <RouterLink
@@ -94,11 +105,15 @@
 <script>
 import axios, { AUTH_SESSION_KEY } from '../axios'
 import logo from '../assets/logo.png'
+import NotificationCenter from './NotificationCenter.vue'
+import { setLanguage } from '../i18n'
+import { accessState, hasPermission, PERMISSIONS, setCurrentUser } from '../access'
 
 const API_ORIGIN = 'http://localhost:8000'
 
 export default {
   name: 'NavBar',
+  components: { NotificationCenter },
   data() {
     return {
       logo,
@@ -106,6 +121,21 @@ export default {
     }
   },
   computed: {
+    canViewSupplierOrders() {
+      return hasPermission(PERMISSIONS.SUPPLIER_ORDERS_VIEW, accessState.user);
+    },
+    canViewCustomerOrders() {
+      return hasPermission(PERMISSIONS.CUSTOMER_ORDERS_VIEW, accessState.user);
+    },
+    canViewProducts() {
+      return hasPermission(PERMISSIONS.PRODUCTS_VIEW, accessState.user);
+    },
+    canViewWarehouse() {
+      return hasPermission(PERMISSIONS.WAREHOUSE_VIEW, accessState.user);
+    },
+    canViewCounterparties() {
+      return hasPermission(PERMISSIONS.COUNTERPARTIES_VIEW, accessState.user);
+    },
     avatarSrc() {
       return this.mediaUrl(this.profile?.avatar);
     },
@@ -141,7 +171,8 @@ export default {
     },
     handleProfileUpdated(event) {
       this.profile = event.detail || {};
-      localStorage.setItem('current_user_profile', JSON.stringify(this.profile));
+      setCurrentUser(this.profile);
+      setLanguage(this.profile.notification_language || this.profile.company_language_code || 'ru');
     },
     mediaUrl(value) {
       if (!value) return '';

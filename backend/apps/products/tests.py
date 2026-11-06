@@ -75,6 +75,29 @@ class CompanySettingsCompanyScopeTests(APITestCase):
             Decimal('10.00'),
         )
 
+    def test_admin_can_save_china_warehouse_address_in_company_settings(self):
+        self.client.force_authenticate(self.user_a)
+        response = self.client.post('/api/settings/', {
+            'company_china_warehouse_address': '义乌市仓库地址',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.company_a.refresh_from_db()
+        self.assertEqual(self.company_a.china_warehouse_address, '义乌市仓库地址')
+        self.assertEqual(response.data['company_china_warehouse_address'], '义乌市仓库地址')
+
+    def test_admin_can_save_company_language(self):
+        self.client.force_authenticate(self.user_a)
+
+        response = self.client.post('/api/settings/', {
+            'company_language_code': 'en',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.company_a.refresh_from_db()
+        self.assertEqual(self.company_a.language_code, 'en')
+        self.assertEqual(response.data['company_language_code'], 'en')
+
     def test_non_admin_can_read_but_cannot_update_settings(self):
         self.client.force_authenticate(self.user_a_member)
 
@@ -85,6 +108,36 @@ class CompanySettingsCompanyScopeTests(APITestCase):
 
         self.assertEqual(read_response.status_code, 200)
         self.assertEqual(write_response.status_code, 403)
+
+    def test_admin_can_save_stock_control_settings(self):
+        self.client.force_authenticate(self.user_a)
+
+        response = self.client.post('/api/settings/', {
+            'stock_delivery_lead_days': 21,
+            'stock_consumption_history_days': 180,
+            'stock_timezone': 'Asia/Almaty',
+            'stock_weekly_control_enabled': True,
+            'stock_notification_weekday': 4,
+            'stock_notification_time': '09:30',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        settings_obj = CompanySettings.objects.get(company=self.company_a)
+        self.assertEqual(settings_obj.stock_delivery_lead_days, 21)
+        self.assertEqual(settings_obj.stock_consumption_history_days, 180)
+        self.assertEqual(settings_obj.stock_timezone, 'Asia/Almaty')
+        self.assertEqual(settings_obj.stock_notification_weekday, 4)
+        self.assertEqual(settings_obj.stock_notification_time.strftime('%H:%M'), '09:30')
+
+    def test_invalid_stock_timezone_is_rejected(self):
+        self.client.force_authenticate(self.user_a)
+
+        response = self.client.post('/api/settings/', {
+            'stock_timezone': 'Invalid/Zone',
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('stock_timezone', response.data)
 
     @patch('products.currency.fetch_exchange_rate')
     def test_country_change_updates_currency_and_exchange_rates(self, fetch_exchange_rate):
@@ -146,8 +199,11 @@ class ProductSalePriceCalculationTests(APITestCase):
     def setUp(self):
         User = get_user_model()
         self.company = Company.objects.create(name='Calc Company')
+        from users.access import ensure_default_access_structure
+        roles = ensure_default_access_structure(self.company)
         self.user = User.objects.create_user(
             username='calc-user',
+            access_role=roles['WED manager'],
             email='calc@example.com',
             password='password123',
             company=self.company,
@@ -188,7 +244,8 @@ class ProductSalePriceCalculationTests(APITestCase):
             weight_kg=Decimal('1.00'),
         )
 
-        self.assertEqual(product.calculate_sale_price(self.settings), Decimal('2013.00'))
+        self.assertEqual(product.calculate_cost_price(self.settings), Decimal('1111.00'))
+        self.assertEqual(product.calculate_sale_price(self.settings), Decimal('2109'))
 
     def test_sale_price_includes_internal_logistics(self):
         self.settings.internal_logistics_pct = Decimal('0.1000')
@@ -201,10 +258,11 @@ class ProductSalePriceCalculationTests(APITestCase):
             weight_kg=Decimal('1.00'),
         )
 
-        self.assertEqual(product.calculate_sale_price(self.settings), Decimal('2214.30'))
+        self.assertEqual(product.calculate_cost_price(self.settings), Decimal('1222.10'))
+        self.assertEqual(product.calculate_sale_price(self.settings), Decimal('2320'))
 
     def test_product_api_ignores_submitted_sale_price_and_uses_backend_formula(self):
-        self.client.force_authenticate(self.user)
+        self.client.force_authenticate(self.admin_user)
 
         response = self.client.post('/api/products/', {
             'name': 'API Calculator Product',
@@ -217,11 +275,12 @@ class ProductSalePriceCalculationTests(APITestCase):
         })
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data['sale_price'], '2013.00')
+        self.assertEqual(response.data['cost_price'], Decimal('1111.00'))
+        self.assertEqual(response.data['sale_price'], '2109.00')
 
     def test_category_margin_update_recalculates_existing_products(self):
         category = ProductCategory.objects.create(company=self.company, name='Textile')
-        self.client.force_authenticate(self.user)
+        self.client.force_authenticate(self.admin_user)
         create_response = self.client.post('/api/products/', {
             'name': 'Category Margin Product',
             'sku': 'CATEGORY-MARGIN-001',
@@ -232,7 +291,7 @@ class ProductSalePriceCalculationTests(APITestCase):
             'weight_kg': '1.00',
         })
         self.assertEqual(create_response.status_code, 201)
-        self.assertEqual(create_response.data['sale_price'], '2013.00')
+        self.assertEqual(create_response.data['sale_price'], '2109.00')
 
         self.client.force_authenticate(self.admin_user)
         update_response = self.client.patch(f'/api/product-category/{category.id}/', {
@@ -241,10 +300,43 @@ class ProductSalePriceCalculationTests(APITestCase):
 
         self.assertEqual(update_response.status_code, 200)
         product = Product.objects.get(sku='CATEGORY-MARGIN-001')
-        self.assertEqual(product.sale_price, Decimal('1811.70'))
+        self.assertEqual(product.sale_price, Decimal('1899.00'))
 
-    def test_product_api_allows_missing_weight_without_sale_price_calculation(self):
-        self.client.force_authenticate(self.user)
+    def test_sale_price_compensates_revenue_deductions_and_rounds_kzt(self):
+        product = Product.objects.create(
+            company=self.company,
+            name='Rounded KZT Product',
+            sku='ROUNDED-KZT-001',
+            supplier=self.supplier,
+            purchase_price=Decimal('10.00'),
+            weight_kg=Decimal('1.00'),
+        )
+
+        price = product.calculate_sale_price(self.settings)
+
+        self.assertEqual(price, Decimal('2109'))
+        net_after_deductions = price * (
+            Decimal('1.00') - self.settings.retail_tax_pct - self.settings.acquiring_pct
+        )
+        target = product.calculate_cost_price(self.settings) * (Decimal('1.00') + self.settings.margin_pct)
+        self.assertLess(abs(net_after_deductions - target), Decimal('0.50'))
+
+    def test_non_kzt_and_non_rub_prices_keep_two_decimal_places(self):
+        self.company.base_currency_code = 'USD'
+        self.company.save(update_fields=['base_currency_code'])
+        product = Product.objects.create(
+            company=self.company,
+            name='USD Product',
+            sku='USD-PRICE-001',
+            supplier=self.supplier,
+            purchase_price=Decimal('10.00'),
+            weight_kg=Decimal('1.00'),
+        )
+
+        self.assertEqual(product.calculate_sale_price(self.settings), Decimal('2109.49'))
+
+    def test_product_api_keeps_automatic_prices_zero_when_weight_is_missing(self):
+        self.client.force_authenticate(self.admin_user)
 
         response = self.client.post('/api/products/', {
             'name': 'No Weight Product',
@@ -255,7 +347,40 @@ class ProductSalePriceCalculationTests(APITestCase):
         })
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['cost_price'], Decimal('0.00'))
         self.assertEqual(response.data['sale_price'], '0.00')
+
+    def test_admin_can_set_manual_sale_price_and_settings_changes_preserve_it(self):
+        self.client.force_authenticate(self.admin_user)
+        response = self.client.post('/api/products/', {
+            'name': 'Manual Price Product',
+            'sku': 'MANUAL-PRICE-001',
+            'supplier_id': self.supplier.id,
+            'purchase_price': '10.00',
+            'sale_price_mode': 'manual',
+            'sale_price': '777.00',
+        })
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['sale_price'], '777.00')
+        self.settings.cny_to_local_rate = Decimal('12.00')
+        self.settings.save()
+        product = Product.objects.get(sku='MANUAL-PRICE-001')
+        self.assertEqual(product.sale_price, Decimal('777.00'))
+
+    def test_regular_user_cannot_set_manual_sale_price(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post('/api/products/', {
+            'name': 'Forbidden Manual Price',
+            'sku': 'FORBIDDEN-MANUAL-001',
+            'supplier_id': self.supplier.id,
+            'purchase_price': '10.00',
+            'sale_price_mode': 'manual',
+            'sale_price': '1.00',
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('sale_price', response.data)
 
     def test_delete_unused_product_removes_it_permanently(self):
         product = Product.objects.create(
@@ -404,7 +529,7 @@ class ProductSalePriceCalculationTests(APITestCase):
             status=status,
             customer=customer,
         )
-        self.client.force_authenticate(self.user)
+        self.client.force_authenticate(self.admin_user)
 
         response = self.client.post('/api/customer-order-items/', {
             'order': order.id,

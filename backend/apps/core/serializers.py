@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 
 
 class AuditFieldsMixinSerializer(serializers.Serializer):
@@ -10,7 +11,10 @@ class AuditFieldsMixinSerializer(serializers.Serializer):
 
 class ChangeLogBaseSerializer(serializers.ModelSerializer):
     changed_by = serializers.StringRelatedField()
-    changed_at = serializers.DateTimeField(format="%Y-%m-%d %H:%M")
+    changed_at = serializers.SerializerMethodField()
 
     class Meta:
         fields = ['field_name', 'old_value', 'new_value', 'changed_by', 'changed_at']
+
+    def get_changed_at(self, obj):
+        return timezone.localtime(obj.changed_at).strftime("%Y-%m-%d %H:%M")

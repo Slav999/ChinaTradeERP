@@ -1,5 +1,6 @@
 <template>
   <div class="container mt-4">
+    <ChatRecordPreview />
     <transition name="save-toast">
       <div v-if="saveToast" class="save-toast">
         {{ saveToast }}
@@ -48,7 +49,7 @@
     </div>
 
     <!-- Add Button -->
-    <button class="btn btn-primary mb-3 d-block mx-auto" @click="openModal">
+    <button v-if="canManageCounterparties" class="btn btn-primary mb-3 d-block mx-auto" @click="openModal">
       + Add Counterparty
     </button>
 
@@ -73,8 +74,8 @@
         <tr
             v-for="item in counterparties"
             :key="item.id"
-            @click="editCounterparty(item)"
-            style="cursor: pointer;"
+            @click="canManageCounterparties && editCounterparty(item)"
+            :style="canManageCounterparties ? 'cursor: pointer;' : ''"
         >
           <td>{{ item.name }}</td>
           <td>
@@ -94,23 +95,24 @@
           <td class="d-none d-md-table-cell">{{ item.address || '—' }}</td>
           <td>
               <span
-                  v-if="item.status && item.status.name"
+                  v-if="item.status && (item.status.display_name || item.status.name)"
                   class="badge rounded-pill"
                   :style="{ backgroundColor: item.status.color, color: '#fff' }"
               >
-                {{ item.status.name }}
+                {{ item.status.display_name || item.status.name }}
               </span>
             <span v-else class="text-muted">—</span>
           </td>
           <td class="actions-cell" @click.stop>
             <div class="actions-group">
+              <ChatShareButton type="counterparty" :record-id="item.id" :title="item.name" compact />
               <button
                   v-if="item.qr_code_image"
                   class="btn btn-sm btn-secondary"
                   @click="showQr(item.qr_code_image)"
               >QR
               </button>
-              <button class="btn btn-sm btn-danger" @click="deleteCounterparty(item.id)">
+              <button v-if="canManageCounterparties" class="btn btn-sm btn-danger" @click="deleteCounterparty(item.id)">
                 Delete
               </button>
             </div>
@@ -126,19 +128,19 @@
       </table>
     </div>
 
-    <div class="d-flex justify-content-between align-items-center mt-3" v-if="totalCount">
+    <div class="d-flex justify-content-between align-items-center mt-3 mb-4" v-if="totalCount">
       <div class="text-muted small">
-        Showing {{ pageStart }}-{{ pageEnd }} of {{ totalCount }}
+        {{ $t(`Showing ${pageStart}-${pageEnd} of ${totalCount}`) }}
       </div>
       <div class="btn-group">
         <button class="btn btn-outline-secondary btn-sm" :disabled="page <= 1 || isLoading" @click="changePage(page - 1)">
-          Previous
+          {{ $t('Previous') }}
         </button>
         <button class="btn btn-outline-secondary btn-sm disabled">
-          Page {{ page }} / {{ totalPages }}
+          {{ $t(`Page ${page} / ${totalPages}`) }}
         </button>
         <button class="btn btn-outline-secondary btn-sm" :disabled="page >= totalPages || isLoading" @click="changePage(page + 1)">
-          Next
+          {{ $t('Next') }}
         </button>
       </div>
     </div>
@@ -245,7 +247,7 @@
                   </div>
                   <div class="col-12">
                     <label class="form-label">QR Code Image</label>
-                    <input type="file" class="form-control" @change="handleQrUpload"/>
+                    <input ref="qrInput" type="file" class="form-control" @change="handleQrUpload"/>
                     <div
                         v-if="qrPreview"
                         class="qr-preview-box mt-2"
@@ -259,8 +261,12 @@
               </form>
             </div>
             <div class="modal-footer">
+              <div v-if="isEdit && selectedId" class="me-auto d-flex flex-wrap gap-2">
+                <ChatShareButton type="counterparty" :record-id="Number(selectedId)" :title="counterpartyForm.name" @shared="closeModal" />
+                <RelatedChatsButton v-if="showModal" type="counterparty" :record-id="Number(selectedId)" :title="counterpartyForm.name" @opened="closeModal" />
+              </div>
               <button class="btn btn-secondary" @click="closeModal">Cancel</button>
-              <button class="btn btn-primary" @click="saveCounterparty">
+              <button v-if="canManageCounterparties" class="btn btn-primary" @click="saveCounterparty">
                 {{ isEdit ? 'Save' : 'Create' }}
               </button>
             </div>
@@ -347,16 +353,30 @@
 
 <script>
 import axios from '../axios';
+import ChatRecordPreview from '../components/ChatRecordPreview.vue';
+import ChatShareButton from '../components/ChatShareButton.vue';
+import RelatedChatsButton from '../components/RelatedChatsButton.vue';
 import debounce from 'lodash/debounce';
-import { clearCacheByPrefix, getCachedJson, getSavedState, paginatedResults, setCachedJson, setSavedState } from '../utils/pageCache';
+import { clearCacheByPrefix, getCachedJson, setCachedJson } from '../utils/pageCache';
+import {
+  applyPaginatedData,
+  changeTablePage,
+  DEFAULT_PAGE_SIZE,
+  getCachedTablePage,
+  makeTableCacheKey,
+  pageMeta,
+  restoreTableStateSnapshot,
+  saveTableStateSnapshot,
+  setCachedTablePage,
+} from '../utils/tablePage';
+import { accessState, hasPermission, PERMISSIONS } from '../access';
 import StatusSelect from '../components/StatusSelect.vue';
 
 const TABLE_STATE_KEY = 'counterparties-table-state';
-const PAGE_SIZE = 50;
 
 export default {
   name: 'CounterpartyView',
-  components: { StatusSelect },
+  components: { ChatShareButton, RelatedChatsButton, ChatRecordPreview, StatusSelect },
   data() {
     return {
       showEditContent: true,
@@ -376,7 +396,7 @@ export default {
       searchQuery: '',
       filters: {type: '', role: '', status: ''},
       page: 1,
-      pageSize: PAGE_SIZE,
+      pageSize: DEFAULT_PAGE_SIZE,
       totalCount: 0,
       isLoading: false,
       defaultForm: {
@@ -407,14 +427,17 @@ export default {
     this.fetchStatuses();
   },
   computed: {
+    canManageCounterparties() {
+      return hasPermission(PERMISSIONS.COUNTERPARTIES_MANAGE, accessState.user);
+    },
     totalPages() {
-      return Math.max(1, Math.ceil(this.totalCount / this.pageSize));
+      return pageMeta(this.page, this.totalCount, this.pageSize).totalPages;
     },
     pageStart() {
-      return this.totalCount ? ((this.page - 1) * this.pageSize) + 1 : 0;
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageStart;
     },
     pageEnd() {
-      return Math.min(this.page * this.pageSize, this.totalCount);
+      return pageMeta(this.page, this.totalCount, this.pageSize).pageEnd;
     }
   },
   methods: {
@@ -438,7 +461,7 @@ export default {
     },
     async fetchCounterparties({ useCache = false } = {}) {
       const cacheKey = this.counterpartiesCacheKey();
-      const cached = useCache ? getCachedJson(cacheKey) : null;
+      const cached = getCachedTablePage(cacheKey, useCache);
       if (cached) {
         this.applyCounterpartiesResponse(cached);
       }
@@ -448,7 +471,7 @@ export default {
         const res = await axios.get('/api/counterparties/', {
           params: this.counterpartyQueryParams()
         });
-        setCachedJson(cacheKey, res.data);
+        setCachedTablePage(cacheKey, res.data);
         this.applyCounterpartiesResponse(res.data);
         this.isLoading = false;
       } catch (e) {
@@ -478,22 +501,16 @@ export default {
       };
     },
     counterpartiesCacheKey() {
-      return `counterparties:${JSON.stringify(this.counterpartyQueryParams())}`;
+      return makeTableCacheKey('counterparties', this.counterpartyQueryParams());
     },
     applyCounterpartiesResponse(data) {
-      const page = paginatedResults(data);
-      this.counterparties = page.results;
-      this.totalCount = page.count;
+      applyPaginatedData(this, data, 'counterparties');
     },
     saveTableState() {
-      setSavedState(TABLE_STATE_KEY, {
-        page: this.page,
-        searchQuery: this.searchQuery,
-        filters: this.filters,
-      });
+      saveTableStateSnapshot(TABLE_STATE_KEY, this);
     },
     restoreTableState() {
-      const state = getSavedState(TABLE_STATE_KEY, {
+      const state = restoreTableStateSnapshot(TABLE_STATE_KEY, {
         page: 1,
         searchQuery: '',
         filters: {type: '', role: '', status: ''},
@@ -507,10 +524,7 @@ export default {
       };
     },
     changePage(page) {
-      if (page < 1 || page > this.totalPages || page === this.page) return;
-      this.page = page;
-      this.saveTableState();
-      this.fetchCounterparties({ useCache: true });
+      changeTablePage(this, page, 'fetchCounterparties');
     },
     openModal() {
       this.resetForm();
@@ -519,9 +533,11 @@ export default {
       this.showEditContent = true;
       this.selectedId = null;
       this.qrPreview = null;
+      this.resetQrInput();
     },
     closeModal() {
       this.showModal = false;
+      this.resetQrInput();
     },
     editCounterparty(item) {
       this.counterpartyForm = {
@@ -534,6 +550,7 @@ export default {
       this.showModal = true;
       this.selectedId = item.id;
       this.qrPreview = item.qr_code_image || null;
+      this.resetQrInput();
     },
     async saveCounterparty() {
       try {
@@ -560,6 +577,7 @@ export default {
           qr_code_image: null
         };
         this.qrPreview = res.data.qr_code_image || null;
+        this.resetQrInput();
         clearCacheByPrefix('counterparties:');
         clearCacheByPrefix('counterparty-options');
         clearCacheByPrefix('supplier-orders:');
@@ -604,6 +622,12 @@ export default {
       if (f) {
         this.counterpartyForm.qr_code_image = f;
         this.qrPreview = URL.createObjectURL(f);
+      }
+    },
+    resetQrInput() {
+      this.counterpartyForm.qr_code_image = null;
+      if (this.$refs.qrInput) {
+        this.$refs.qrInput.value = '';
       }
     },
     openHistory() {

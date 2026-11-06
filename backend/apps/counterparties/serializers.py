@@ -1,12 +1,16 @@
 from rest_framework import serializers
 from .models import Counterparty, CounterpartyStatus, CounterpartyChangeLog
 from core.serializers import AuditFieldsMixinSerializer, ChangeLogBaseSerializer
+from core.statuses import TranslatableStatusSerializerMixin
 
-class CounterpartyStatusSerializer(serializers.ModelSerializer):
+class CounterpartyStatusSerializer(TranslatableStatusSerializerMixin, serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
     class Meta:
         model = CounterpartyStatus
         fields = '__all__'
-        read_only_fields = ('company',)
+        read_only_fields = ('company', 'code', 'is_system')
+        extra_kwargs = {'name': {'required': False}}
 
     def validate_name(self, value):
         name = value.strip()

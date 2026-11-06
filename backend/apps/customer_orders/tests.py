@@ -4,7 +4,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from counterparties.models import Counterparty
-from customer_orders.models import CustomerOrder, CustomerOrderItem, CustomerOrderStatus
+from customer_orders.models import (
+    CustomerOrder,
+    CustomerOrderChangeLog,
+    CustomerOrderItem,
+    CustomerOrderStatus,
+)
 from products.models import CompanySettings, Product
 from supplier_orders.models import SupplierOrder, SupplierOrderStatus
 from users.models import Company, CustomUser
@@ -14,11 +19,13 @@ class CreateSupplierOrdersTests(APITestCase):
     def setUp(self):
         self.company = Company.objects.create(name='Acme')
         self.company.apply_country_defaults('KZ')
+        self.company.china_warehouse_address = 'China warehouse, Guangzhou'
         self.company.save(update_fields=[
             'business_country',
             'base_currency_code',
             'base_currency_symbol',
             'locale_code',
+            'china_warehouse_address',
         ])
         CompanySettings.objects.create(
             company=self.company,
@@ -31,12 +38,14 @@ class CreateSupplierOrdersTests(APITestCase):
             email='manager@example.com',
             password='pass',
             company=self.company,
+            is_company_admin=True,
         )
         self.other_user = CustomUser.objects.create_user(
             username='other',
             email='other@example.com',
             password='pass',
             company=self.other_company,
+            is_company_admin=True,
         )
         self.client.force_authenticate(self.user)
 
@@ -120,7 +129,7 @@ class CreateSupplierOrdersTests(APITestCase):
         self.assertEqual(order_a.customer_order, self.order)
         self.assertEqual(order_a.customer, self.customer)
         self.assertEqual(order_a.status, self.supplier_status)
-        self.assertEqual(order_a.shipping_address, 'Warehouse 1')
+        self.assertEqual(order_a.shipping_address, 'China warehouse, Guangzhou')
         self.assertEqual(order_a.shipping_code, 'SHIP-1')
         self.assertEqual(order_a.items.count(), 1)
         self.assertEqual(order_a.items.first().product, self.product_a)
@@ -313,6 +322,53 @@ class CreateSupplierOrdersTests(APITestCase):
             {child['supplier_name'] for child in response.data['children']},
             {'Supplier A', 'Supplier B'},
         )
+
+    def test_item_sale_price_is_snapshotted_and_used_after_product_price_changes(self):
+        item = CustomerOrderItem.objects.get(product=self.product_a)
+        self.assertEqual(item.unit_sale_price, Decimal('20.00'))
+
+        self.product_a.sale_price = Decimal('99.00')
+        self.product_a.save(update_fields=['sale_price'])
+
+        response = self.client.get(f'/api/customer-order/{self.order.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item_data = next(row for row in response.data['items'] if row['id'] == item.id)
+        self.assertEqual(item_data['unit_sale_price'], '20.00')
+        self.assertEqual(item_data['line_total_before_discount'], Decimal('40.00'))
+        self.assertEqual(response.data['subtotal_before_order_discount'], Decimal('130.00'))
+
+    def test_item_sale_price_can_be_changed_and_is_logged(self):
+        item = CustomerOrderItem.objects.get(product=self.product_a)
+
+        response = self.client.patch(
+            f'/api/customer-order-items/{item.id}/',
+            {'unit_sale_price': '17.25'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.unit_sale_price, Decimal('17.25'))
+        log = CustomerOrderChangeLog.objects.get(
+            customer_order=self.order,
+            field_name='item_unit_sale_price',
+        )
+        self.assertEqual(log.old_value, 'A-001: 20.00')
+        self.assertEqual(log.new_value, 'A-001: 17.25')
+        self.assertEqual(log.changed_by, self.user)
+
+    def test_item_sale_price_cannot_be_negative(self):
+        item = CustomerOrderItem.objects.get(product=self.product_a)
+
+        response = self.client.patch(
+            f'/api/customer-order-items/{item.id}/',
+            {'unit_sale_price': '-0.01'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('unit_sale_price', response.data)
+        item.refresh_from_db()
+        self.assertEqual(item.unit_sale_price, Decimal('20.00'))
 
     def test_company_scope_blocks_other_company_user(self):
         self.client.force_authenticate(self.other_user)

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { refreshTranslations } from './i18n';
+import { clearChatDrafts } from './utils/chatDrafts';
 
 const AUTH_SESSION_KEY = 'auth_session';
 let refreshRequest = null;
@@ -12,10 +14,12 @@ function getCookie(name) {
 }
 
 function clearClientSession() {
+  clearChatDrafts();
   localStorage.removeItem(AUTH_SESSION_KEY);
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
   localStorage.removeItem('current_user_profile');
+  sessionStorage.clear();
 }
 
 const api = axios.create({
@@ -38,8 +42,20 @@ api.interceptors.request.use(config => {
 });
 
 api.interceptors.response.use(
-  response => response,
+  response => {
+    const method = (response.config?.method || 'get').toUpperCase();
+    const url = response.config?.url || '';
+    if (
+      !['GET', 'HEAD', 'OPTIONS'].includes(method) &&
+      /\/api\/(customer-orders|supplier-orders|products)(\/|$)/.test(url)
+    ) {
+      window.dispatchEvent(new CustomEvent('warehouse-stock-changed'));
+    }
+    refreshTranslations();
+    return response;
+  },
   async error => {
+    refreshTranslations();
     const original = error.config;
     const url = original?.url || '';
 

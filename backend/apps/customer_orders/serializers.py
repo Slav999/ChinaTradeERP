@@ -11,15 +11,20 @@ from .models import (
 from counterparties.models import Counterparty
 from products.models import Product
 from core.serializers import AuditFieldsMixinSerializer, ChangeLogBaseSerializer
+from core.statuses import TranslatableStatusSerializerMixin
 from counterparties.serializers import CounterpartySerializer
 from products.serializers import ProductSerializer, UnitSerializer
+from users.access import user_has_permission
 
 
-class CustomerOrderStatusSerializer(serializers.ModelSerializer):
+class CustomerOrderStatusSerializer(TranslatableStatusSerializerMixin, serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomerOrderStatus
         fields = '__all__'
-        read_only_fields = ('company',)
+        read_only_fields = ('company', 'code', 'is_system')
+        extra_kwargs = {'name': {'required': False}}
 
     def validate_name(self, value):
         name = value.strip()
@@ -43,7 +48,6 @@ class ShippingAddressSerializer(serializers.ModelSerializer):
 class CustomerOrderItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     unit = serializers.CharField(source='product.unit.name', read_only=True)
-    unit_sale_price = serializers.SerializerMethodField()
     line_total_before_discount = serializers.SerializerMethodField()
     line_total_after_discount = serializers.SerializerMethodField()
 
@@ -62,17 +66,21 @@ class CustomerOrderItemSerializer(serializers.ModelSerializer):
             'discount_pct', 'unit_sale_price', 'line_total_before_discount',
             'line_total_after_discount',
         )
-
-    def get_unit_sale_price(self, obj):
-        return (obj.product.sale_price or Decimal('0.00')).quantize(Decimal('0.01'))
+        extra_kwargs = {
+            'unit_sale_price': {'required': False, 'allow_null': False},
+        }
 
     def get_line_total_before_discount(self, obj):
-        unit_price = obj.product.sale_price or Decimal('0.00')
+        unit_price = obj.unit_sale_price
+        if unit_price is None:
+            unit_price = obj.product.sale_price or Decimal('0.00')
         quantity = obj.quantity or Decimal('0.00')
         return (unit_price * quantity).quantize(Decimal('0.01'))
 
     def get_line_total_after_discount(self, obj):
-        unit_price = obj.product.sale_price or Decimal('0.00')
+        unit_price = obj.unit_sale_price
+        if unit_price is None:
+            unit_price = obj.product.sale_price or Decimal('0.00')
         quantity = obj.quantity or Decimal('0.00')
         discount_pct = obj.discount_pct or Decimal('0.0000')
         return (unit_price * quantity * (Decimal('1.0000') - discount_pct)).quantize(Decimal('0.01'))
@@ -82,7 +90,20 @@ class CustomerOrderItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Discount must be between 0 and 100%.')
         return value
 
+    def validate_unit_sale_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Sale price cannot be negative.')
+        return value
+
     def validate(self, attrs):
+        request = self.context.get('request')
+        if (
+            {'unit_sale_price', 'discount_pct'}.intersection(attrs)
+            and not user_has_permission(getattr(request, 'user', None), 'pricing.sale.order.manage')
+        ):
+            raise serializers.ValidationError({
+                'unit_sale_price': 'You do not have permission to change sale prices or discounts.'
+            })
         order = attrs.get('order', getattr(self.instance, 'order', None))
         discount_pct = attrs.get('discount_pct', getattr(self.instance, 'discount_pct', Decimal('0.0000')))
         if order and order.pk:
@@ -93,9 +114,26 @@ class CustomerOrderItemSerializer(serializers.ModelSerializer):
             })
         return attrs
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.sale.view'):
+            for field_name in (
+                'discount_pct', 'unit_sale_price', 'line_total_before_discount',
+                'line_total_after_discount',
+            ):
+                data.pop(field_name, None)
+        return data
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.sale.view'):
+            for field_name in (
+                'discount_pct', 'unit_sale_price', 'line_total_before_discount',
+                'line_total_after_discount',
+            ):
+                self.fields.pop(field_name, None)
         if request and request.user.is_authenticated:
             company = request.user.company
             self.fields['order'].queryset = CustomerOrder.objects.filter(
@@ -131,9 +169,9 @@ class CustomerOrderListSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerOrder
         fields = (
-            'id', 'order_number', 'customer',
+            'id', 'order_number', 'order_year', 'is_previous_year', 'created_at', 'customer',
             'planned_receipt_date', 'shipment_date',
-            'shipping_code', 'status'
+            'shipping_code', 'status', 'sent_at',
         )
 
 
@@ -160,9 +198,9 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
     class Meta:
         model = CustomerOrder
         fields = (
-            'id', 'order_number', 'created_at', 'updated_at', 'created_by', 'updated_by',
+            'id', 'order_number', 'order_year', 'is_previous_year', 'created_at', 'updated_at', 'created_by', 'updated_by',
             'status', 'status_id', 'customer', 'customer_id',
-            'planned_receipt_date', 'shipment_date',
+            'planned_receipt_date', 'shipment_date', 'sent_at',
             'shipping_address', 'shipping_code', 'discount_pct',
             'customer_comment', 'internal_comment',
             'items', 'attachments',
@@ -173,7 +211,9 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
         total = Decimal('0.00')
         items = obj.items.select_related('product').all()
         for item in items:
-            unit_price = item.product.sale_price or Decimal('0.00')
+            unit_price = item.unit_sale_price
+            if unit_price is None:
+                unit_price = item.product.sale_price or Decimal('0.00')
             quantity = item.quantity or Decimal('0.00')
             line_discount = item.discount_pct or Decimal('0.0000')
             total += unit_price * quantity * (Decimal('1.0000') - line_discount)
@@ -194,6 +234,13 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
 
     def validate(self, attrs):
         request = self.context.get('request')
+        if (
+            'discount_pct' in getattr(self, 'initial_data', {})
+            and not user_has_permission(getattr(request, 'user', None), 'pricing.sale.order.manage')
+        ):
+            raise serializers.ValidationError({
+                'discount_pct': 'You do not have permission to change sale prices or discounts.'
+            })
         customer = attrs.get('customer', getattr(self.instance, 'customer', None))
         status = attrs.get('status', getattr(self.instance, 'status', None))
         discount_pct = attrs.get('discount_pct', getattr(self.instance, 'discount_pct', Decimal('0.0000')))
@@ -213,6 +260,17 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
                 })
         return attrs
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.sale.view'):
+            for field_name in (
+                'discount_pct', 'subtotal_before_order_discount',
+                'order_discount_amount', 'total_after_discount',
+            ):
+                data.pop(field_name, None)
+        return data
+
     def validate_discount_pct(self, value):
         if value < 0 or value > 1:
             raise serializers.ValidationError('Discount must be between 0 and 100%.')
@@ -221,6 +279,12 @@ class CustomerOrderSerializer(AuditFieldsMixinSerializer, serializers.ModelSeria
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
+        if request and not user_has_permission(request.user, 'pricing.sale.view'):
+            for field_name in (
+                'discount_pct', 'subtotal_before_order_discount',
+                'order_discount_amount', 'total_after_discount',
+            ):
+                self.fields.pop(field_name, None)
         if request and request.user.is_authenticated:
             company = request.user.company
             self.fields['status_id'].queryset = CustomerOrderStatus.objects.filter(company=company)

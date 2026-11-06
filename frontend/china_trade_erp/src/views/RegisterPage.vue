@@ -60,6 +60,14 @@
         </div>
 
         <div class="mb-3">
+          <label for="language_code" class="form-label">Company language</label>
+          <select v-model="form.language_code" id="language_code" class="form-select">
+            <option value="ru">Russian</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
           <label for="username" class="form-label">Username</label>
           <input
             v-model="form.username"
@@ -141,6 +149,7 @@ export default {
         username: '',
         email: '',
         business_country: '',
+        language_code: 'ru',
         password: '',
         password2: ''
       },
@@ -170,11 +179,20 @@ export default {
   created() {
     this.fetchCountries()
   },
+  watch: {
+    'form.language_code'() {
+      this.fetchCountries()
+    },
+  },
   methods: {
     async fetchCountries() {
       try {
-        const { data } = await axios.get('/api/auth/business-countries/')
+        const selectedCode = this.form.business_country
+        const { data } = await axios.get('/api/auth/business-countries/', {
+          params: { language: this.form.language_code },
+        })
         this.countries = data
+        if (selectedCode) this.countrySearch = data.find(country => country.code === selectedCode)?.name || this.countrySearch
       } catch {
         this.countries = []
       }
@@ -236,6 +254,7 @@ export default {
             {
               company_name: this.form.company_name,
               business_country: this.form.business_country,
+              language_code: this.form.language_code,
               username: this.form.username,
               email: this.form.email,
               password: this.form.password,
